@@ -28,5 +28,9 @@ class Settings(BaseSettings):
     max_leverage: int = 3
     stop_pct: float = 0.02
 
+    # event watcher / dead-man (T4)
+    tick_interval_sec: int = 60        # how often the watcher checks regime + watchdog
+    heartbeat_timeout_sec: int = 5400  # 90m without a swarm heartbeat -> safe-mode
+
 
 settings = Settings()

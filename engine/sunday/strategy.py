@@ -1,5 +1,6 @@
 """Strategy engine: compute a target position from the active strategy and
-reconcile the live position to match it. Deterministic — the LLM never runs here.
+reconcile the live position to match it. Plus the T4 regime watcher + dead-man
+watchdog. Deterministic — the LLM never runs here.
 
 milestone 1.0 strategies: `momentum` (EMA cross) and `flat`. `mean_reversion`
 lands in 1.1.
@@ -7,7 +8,7 @@ lands in 1.1.
 
 from __future__ import annotations
 
-from . import exchange, risk, store
+from . import events, exchange, risk, store
 from .config import settings
 
 STRATEGIES = {"momentum", "flat"}  # mean_reversion -> 1.1
@@ -110,3 +111,44 @@ def halt(mode: str, reason: str) -> dict:
     elif mode == "safe":
         store.set_mode("safe")
     return {"mode": store.get_mode()}
+
+
+# --- regime watcher + dead-man watchdog (T4) -------------------------------
+
+def _detect_regime_and_notify(symbol: str) -> dict:
+    """Emit regime_shift on an EMA-cross flip (debounced via redis last_regime)."""
+    try:
+        target = compute_target(symbol, "momentum")
+    except Exception as e:  # exchange/indicator failure -> tell the leader
+        events.notify("engine_degraded", "engine degraded", f"無法取得行情/指標：{e}", to="leader")
+        return {"degraded": str(e)}
+    regime = target["side"]  # long | short
+    last = store.get_last_regime()
+    if regime != last:
+        store.set_last_regime(regime)
+        if last is not None:  # don't emit on the first-ever baseline
+            events.notify(
+                "regime_shift", f"regime shift → {regime}", target["rationale"],
+                data=target["indicators"], to="leader",
+            )
+            return {"regime": regime, "shifted": True, "prev": last}
+    return {"regime": regime, "shifted": False}
+
+
+def _watchdog_check() -> dict:
+    """If the swarm stopped heartbeating, enter safe-mode (freeze new entries)."""
+    age = store.heartbeat_age()
+    if age is not None and age > settings.heartbeat_timeout_sec and store.get_mode() == "active":
+        store.set_mode("safe")
+        events.notify(
+            "safe_mode_entered", "safe-mode entered",
+            f"swarm heartbeat 逾時 {int(age)}s（>{settings.heartbeat_timeout_sec}s），凍結新倉", to="leader",
+        )
+        return {"safe_mode": True, "age": age}
+    return {"safe_mode": False, "age": age}
+
+
+def tick() -> dict:
+    """One periodic self-check (regime + watchdog), run by the watcher loop."""
+    sym = settings.symbol
+    return {"regime": _detect_regime_and_notify(sym), "watchdog": _watchdog_check()}

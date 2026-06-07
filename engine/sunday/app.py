@@ -2,11 +2,13 @@
 
 T1: startup (db pool + redis + migrations), /manual, /health.
 T2: /market (public), /positions, /pnl (private).
-T3: /strategy + /halt levers, real /status (strategy + position + envelope).
+T3: /strategy + /halt levers, real /status.
+T4: /heartbeat + background watcher (regime detect -> notify; dead-man watchdog).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
 from contextlib import asynccontextmanager
@@ -24,6 +26,7 @@ log = logging.getLogger("sunday")
 _MANUAL = pathlib.Path(__file__).resolve().parent / "manual.md"
 
 T = TypeVar("T")
+_watcher_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -31,8 +34,25 @@ async def lifespan(app: FastAPI):
     store.connect()
     applied = store.run_migrations()
     log.info("migrations applied: %s", applied or "(up to date)")
+    store.set_heartbeat()  # baseline so the watchdog doesn't fire at boot
+    global _watcher_task
+    _watcher_task = asyncio.create_task(_watch_loop())
     yield
+    if _watcher_task is not None:
+        _watcher_task.cancel()
     store.close()
+
+
+async def _watch_loop() -> None:
+    """Periodic cheap self-check: regime detection (-> webhook) + dead-man watchdog."""
+    while True:
+        try:
+            await asyncio.sleep(settings.tick_interval_sec)
+            await asyncio.to_thread(strategy.tick)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:  # never let the watcher die
+            log.warning("watcher tick error: %s", e)
 
 
 app = FastAPI(title="Sunday", version="0.1.0", lifespan=lifespan)
@@ -74,6 +94,8 @@ def status() -> dict:
     mode = store.get_mode()
     strat = store.current_strategy(settings.symbol)
     rationale = store.get_rationale() or "(尚無決策)"
+    age = store.heartbeat_age()
+    swarm_ok = age is None or age < settings.heartbeat_timeout_sec
     position = None
     exposure = equity = 0.0
     leverage = 0
@@ -104,8 +126,8 @@ def status() -> dict:
         "leverage": leverage,
         "equity": equity,
         "pnl_day": None,
-        "last_event_ts": None,
-        "swarm_heartbeat_ok": True,
+        "last_event_ts": store.get_last_event_ts(),
+        "swarm_heartbeat_ok": swarm_ok,
     }
 
 
@@ -194,3 +216,9 @@ def post_halt(req: HaltReq) -> dict:
     except Exception as e:
         raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
     return {"ok": True, **result}
+
+
+@app.post("/heartbeat")
+def heartbeat() -> dict:
+    store.set_heartbeat()
+    return {"ok": True, "watchdog_reset_at": datetime.now(timezone.utc).isoformat()}

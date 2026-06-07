@@ -1,14 +1,15 @@
 """Postgres pool + redis client + a tiny migration runner + the 1.0 DAO.
 
-Runtime state (mode/rationale) lives in redis; the trade ledger
-(strategy_state/signals/orders/positions/risk_events) lives in postgres.
-The exchange remains the source of truth for actual positions — these tables
-are our attribution/audit record (modeling-grade).
+Runtime state (mode/rationale/heartbeat/regime) lives in redis; the trade ledger
+(strategy_state/signals/orders/positions/risk_events/webhook_log) lives in postgres.
+The exchange remains the source of truth for actual positions — these tables are
+our attribution/audit record (modeling-grade).
 """
 
 from __future__ import annotations
 
 import pathlib
+import time
 
 import redis
 from psycopg.types.json import Jsonb
@@ -85,6 +86,35 @@ def set_rationale(text: str) -> None:
         rds.set("sunday:rationale", text)
 
 
+def set_heartbeat() -> None:
+    if rds:
+        rds.set("sunday:heartbeat_ts", time.time())
+
+
+def heartbeat_age() -> float | None:
+    """Seconds since the last swarm heartbeat, or None if never seen."""
+    v = rds.get("sunday:heartbeat_ts") if rds else None
+    return (time.time() - float(v)) if v else None
+
+
+def get_last_regime() -> str | None:
+    return rds.get("sunday:last_regime") if rds else None
+
+
+def set_last_regime(regime: str) -> None:
+    if rds:
+        rds.set("sunday:last_regime", regime)
+
+
+def get_last_event_ts() -> str | None:
+    return rds.get("sunday:last_event_ts") if rds else None
+
+
+def set_last_event_ts(ts_iso: str) -> None:
+    if rds:
+        rds.set("sunday:last_event_ts", ts_iso)
+
+
 # --- strategy state --------------------------------------------------------
 
 def set_strategy(symbol: str, strategy: str, reason: str, set_by: str) -> None:
@@ -151,4 +181,16 @@ def record_risk_event(type_: str, detail: dict, action_taken: str) -> None:
         conn.execute(
             "INSERT INTO risk_events (type, detail, action_taken) VALUES (%s,%s,%s)",
             (type_, Jsonb(detail), action_taken),
+        )
+
+
+def record_webhook(
+    event_type: str, to_member: str, title: str | None, body: str | None,
+    http_status: int | None, message_id: str | None,
+) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO webhook_log (event_type, to_member, title, body, http_status, message_id)"
+            " VALUES (%s,%s,%s,%s,%s,%s)",
+            (event_type, to_member, title, body, http_status, message_id),
         )
