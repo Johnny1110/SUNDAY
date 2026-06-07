@@ -7,15 +7,19 @@ Sunday 是交易引擎，在 `http://127.0.0.1:7777`。完整 API：`curl -s htt
 ```bash
 curl -s http://127.0.0.1:7777/status                                          # 當值策略 + 理由 + 倉位 + 曝險
 curl -s "http://127.0.0.1:7777/market?symbol=BTCUSDT&tf=1h&limit=100"          # OHLCV
-curl -s http://127.0.0.1:7777/positions ; curl -s http://127.0.0.1:7777/pnl    # 倉位 / 損益
+curl -s http://127.0.0.1:7777/positions ; curl -s http://127.0.0.1:7777/pnl    # 倉位 / 損益 + 權益曲線
+curl -s http://127.0.0.1:7777/performance                                      # per-strategy 績效歸因（哪個策略在賺/賠）
 ```
+
+> User 在 `http://127.0.0.1:7777/dashboard` 看權益曲線 / 倉位 / 歸因 / 你的切換理由 / analyst commentary。
 
 ## Lever（會跳審批；只有你能用）
 
 ```bash
-# 切換策略（reason 必填，會留存給 User）。strategy ∈ momentum | flat（mean_reversion 1.1 才有）
+# 切換策略（reason 必填）。strategy ∈ momentum | flat（mean_reversion 1.1 才有）
+# ⚠ reason 會直接顯示在 User dashboard 的切換時間軸上——寫成人看得懂的決策理由，別用內部代號。
 curl -sX POST http://127.0.0.1:7777/strategy -H 'Content-Type: application/json' \
-  -d '{"symbol":"BTCUSDT","strategy":"momentum","reason":"<為什麼切>"}'
+  -d '{"symbol":"BTCUSDT","strategy":"momentum","reason":"<為什麼切：regime 讀數 + 依據>"}'
 
 # 叫停：flat=全平、safe=凍新倉
 curl -sX POST http://127.0.0.1:7777/halt -H 'Content-Type: application/json' \

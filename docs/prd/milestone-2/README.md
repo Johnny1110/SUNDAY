@@ -13,7 +13,7 @@
 
 | 版本 | 範圍 | 環境 | Gate | 狀態 | 文件 |
 | --- | --- | --- | --- | --- | --- |
-| **2.0** | **Sunday 自服 execution dashboard**：補齊資料捕捉（權益曲線快照 / realized 歸因 / commentary）+ Sunday 服一頁 web UI（權益曲線 / 30 日 PnL / 倉位 / per-strategy 歸因 / 切換理由疊圖 / commentary feed） | testnet | User 在一頁 Sunday-served dashboard 看到 D14 的全部（testnet 資料） | ⬜ **待 User 確認** | [milestone-2.0/](milestone-2.0/)（overview + T1–T4） |
+| **2.0** | **Sunday 自服 execution dashboard**：補齊資料捕捉（權益曲線快照 / realized 歸因 / commentary）+ Sunday 服一頁 web UI（權益曲線 / 30 日 PnL / 倉位 / per-strategy 歸因 / 切換理由疊圖 / commentary feed） | testnet | User 在一頁 Sunday-served dashboard 看到 D14 的全部（testnet 資料） | ✅ **完成（2026-06-07）— B1–B7 全達** | [milestone-2.0/](milestone-2.0/)（overview + T1–T4） |
 | **2.1** | **情報 extras**：analyst 外部輸入（fear & greed / on-chain / 新聞 web）+ telegram 對外播報 | testnet | analyst commentary 有真實外部訊號來源；team 狀態經 telegram 對外播報 | ⬜ 待開 | （待建） |
 | **2.2** | **研究 extras**：回測引擎（postgres 歷史回放）+ Sunday 內 ML 建模 + 多策略 / 策略精進 | testnet | 能在捕捉的歷史上回測 + 訓練模型；多策略並行 | ⬜ 待開 | （待建） |
 | **2.3** | **Go-live 硬化 + 小額 mainnet**：webhook 窄權限 token + Sunday command 端點 token + 小額 mainnet（獨立 go-live 決策） | **mainnet** | 真實長期 P&L 為正（Gate-2 真正成敗）；**硬 gated：須 Gate-1 V1–V9 全達 + 2.0–2.2 就緒** | 🔒 鎖（待前置） | （待建） |

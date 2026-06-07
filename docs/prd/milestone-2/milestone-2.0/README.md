@@ -1,6 +1,6 @@
 # Milestone 2.0 — Sunday 自服 execution dashboard（overview + 任務索引）
 
-> **狀態：⬜ 待 User 確認**（PRD 草擬完成，確認後依「一個 session 一個 T」開工）
+> **狀態：✅ 完成（2026-06-07）** — T1–T4 全 commit；live testnet e2e 跑通：commentary → 切策略（附 reason，開 momentum long 0.008）→ 開倉時段權益快照 → `/positions` 帶 strategy/entry_reason/stop → halt flat（realized -0.0248 捕捉）→ `/performance` 歸因。驗收 B1–B7 全達。dashboard 在 `http://127.0.0.1:7777/dashboard`。
 >
 > 上層：[`../../sunday-project-prd.md`](../../sunday-project-prd.md)（**D14** User-facing 系統 of record、§7.7 schema、§7.11、§10 Gate-2、§12.10/§12.11）｜ milestone-2 index：[`../README.md`](../README.md)
 > 繼承上層全部不變量（[`../../../../CLAUDE.md`](../../../../CLAUDE.md) 10 條）。**全程 testnet、純讀 + 一個無害寫入、零真錢。**

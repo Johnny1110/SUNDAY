@@ -19,14 +19,14 @@
 3. 讓引擎跑一段 → 權益曲線累積點；平倉一次 → `/performance` 出現該策略的 realized。
 4. 全程確認：dashboard 全由 Sunday（:7777）serve；evva 端零新增程式碼。
 
-## 驗收（B1–B7，逐項打勾）
-- [ ] **B1 權益曲線**：dashboard 顯示 testnet 權益折線。
-- [ ] **B2 30 日 PnL**：realized + unrealized + equity 數字卡。
-- [ ] **B3 倉位**：含 strategy / entry_reason / stop。
-- [ ] **B4 歸因**：per-strategy realized / 筆數 / 勝率。
-- [ ] **B5 切換理由疊圖**：切換點標在曲線 + `reason` 可見。
-- [ ] **B6 commentary feed**：analyst 貼文顯示。
-- [ ] **B7 D12 + testnet**：全由 Sunday 自服、evva 內零新增 Sunday code、全程 testnet。
+## 驗收（B1–B7，逐項打勾）— ✅ 全達（2026-06-07 live testnet e2e）
+- [x] **B1 權益曲線**：`/pnl.equity_curve` 9+ 點、隨 tick 累積；dashboard 折線渲染（含開倉時段快照 equity 4998.50）。
+- [x] **B2 30 日 PnL**：`/pnl` 回 `realized=-0.0248`、`equity=4998.5`、`window_days=30`；數字卡顯示。
+- [x] **B3 倉位**：開倉中 `/positions` 回 `strategy=momentum` + 完整 `entry_reason` + `stop=60929.7`（DB join）。
+- [x] **B4 歸因**：`/performance` momentum `n_trades=3`、`realized_pnl=-0.0248`、`win_rate`（realized 由平倉時 unrealizedPnl 捕捉）。
+- [x] **B5 切換理由疊圖**：`/strategy_history` 6 筆切換含 `reason`；本輪 18:26 的切換在曲線窗內 → 圖上標記 + tooltip 顯示理由。
+- [x] **B6 commentary feed**：analyst `POST /commentary`（id 1、2）顯示於 feed（時間倒序）。
+- [x] **B7 D12 + testnet**：dashboard 全由 Sunday（:7777）自服；**evva repo 全程 clean（零新增 Sunday code）**；全程 testnet、無真錢。
 
 ## 不在本任務
 - 2.1（telegram / 外部訊號源）、2.2（回測 / ML / 多策略）、2.3（真錢 / token 硬化）。
