@@ -1,0 +1,33 @@
+# secrets / env — Binance testnet keys, NEVER commit
+.env
+.env.*
+*.env
+!.env.example
+
+# evva swarm runtime state (created by `evva swarm .`)
+.vero/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# logs / data dumps
+*.log
+log/
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
