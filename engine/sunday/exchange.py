@@ -87,3 +87,7 @@ def close_position(symbol: str) -> dict | None:
             close_side = "sell" if p["side"] == "long" else "buy"
             return place_market(symbol, close_side, p["contracts"], reduce_only=True)
     return None
+
+
+def cancel_all_orders(symbol: str) -> None:
+    exchange().cancel_all_orders(_sym(symbol))

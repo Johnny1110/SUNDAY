@@ -1,8 +1,8 @@
 """Sunday HTTP service.
 
-T1: startup (db pool + redis + migrations), /manual, /status (stub), /health.
-T2: /market (public OHLCV), /positions, /pnl (private — need testnet key).
-Real /status values + the trading levers land in T3/T4.
+T1: startup (db pool + redis + migrations), /manual, /health.
+T2: /market (public), /positions, /pnl (private).
+T3: /strategy + /halt levers, real /status (strategy + position + envelope).
 """
 
 from __future__ import annotations
@@ -10,12 +10,14 @@ from __future__ import annotations
 import logging
 import pathlib
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Callable, TypeVar
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 
-from . import exchange, store
+from . import exchange, risk, store, strategy
 from .config import settings
 
 log = logging.getLogger("sunday")
@@ -51,6 +53,17 @@ def _ex(fn: Callable[[], T]) -> T:
         raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
 
 
+class StrategyReq(BaseModel):
+    symbol: str = "BTCUSDT"
+    strategy: str
+    reason: str
+
+
+class HaltReq(BaseModel):
+    reason: str
+    mode: str = "flat"  # flat | safe
+
+
 @app.get("/manual", response_class=PlainTextResponse)
 def manual() -> str:
     return _MANUAL.read_text()
@@ -58,18 +71,39 @@ def manual() -> str:
 
 @app.get("/status")
 def status() -> dict:
-    # T1 stub. Real strategy/position values land in T3.
+    mode = store.get_mode()
+    strat = store.current_strategy(settings.symbol)
+    rationale = store.get_rationale() or "(尚無決策)"
+    position = None
+    exposure = equity = 0.0
+    leverage = 0
+    try:
+        for p in exchange.fetch_positions():
+            if p["symbol"] == exchange._sym(settings.symbol) and p.get("contracts"):
+                position = {
+                    "side": p["side"],
+                    "qty": p["contracts"],
+                    "entry": p.get("entryPrice"),
+                    "mark": p.get("markPrice"),
+                    "upnl": p.get("unrealizedPnl"),
+                }
+                exposure = abs(float(p["contracts"]) * float(p.get("markPrice") or 0))
+                leverage = int(float(p.get("leverage") or settings.leverage))
+        bal = exchange.fetch_balance()
+        equity = float((bal.get("total") or {}).get("USDT") or 0.0)
+    except Exception as e:
+        rationale = f"{rationale} [status: exchange unreachable: {type(e).__name__}]"
     return {
         "alive": True,
-        "mode": "flat",
-        "symbol": "BTCUSDT",
-        "strategy": "flat",
-        "strategy_rationale": "(stub) 尚未接策略引擎",
-        "position": None,
-        "exposure_usd": 0,
-        "leverage": 0,
-        "equity": 0,
-        "pnl_day": 0,
+        "mode": mode,
+        "symbol": settings.symbol,
+        "strategy": strat,
+        "strategy_rationale": rationale,
+        "position": position,
+        "exposure_usd": exposure,
+        "leverage": leverage,
+        "equity": equity,
+        "pnl_day": None,
         "last_event_ts": None,
         "swarm_heartbeat_ok": True,
     }
@@ -110,8 +144,8 @@ def positions() -> list[dict]:
             "entry": p.get("entryPrice"),
             "mark": p.get("markPrice"),
             "upnl": p.get("unrealizedPnl"),
-            "stop": None,        # our own stop is tracked in T3
-            "strategy": None,    # ledger tag added in T3
+            "stop": None,
+            "strategy": None,
             "entry_reason": None,
         }
         for p in raw
@@ -126,3 +160,37 @@ def pnl(since: str | None = None) -> dict:
     unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in raw)
     equity = (bal.get("total") or {}).get("USDT")
     return {"realized": None, "unrealized": unrealized, "equity": equity, "equity_curve": []}
+
+
+@app.post("/strategy")
+def post_strategy(req: StrategyReq) -> dict:
+    if req.strategy not in strategy.STRATEGIES:
+        raise HTTPException(400, f"strategy must be one of {sorted(strategy.STRATEGIES)} (mean_reversion lands in 1.1)")
+    _require_key()
+    store.set_strategy(req.symbol, req.strategy, req.reason, set_by="leader")
+    store.set_mode("active")
+    try:
+        result = strategy.reconcile(req.symbol, set_by="leader")
+    except risk.RiskRejected as e:
+        raise HTTPException(409, f"risk rejected: {e}")
+    except Exception as e:
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
+    return {
+        "ok": True,
+        "symbol": req.symbol,
+        "strategy": req.strategy,
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+        "result": result,
+    }
+
+
+@app.post("/halt")
+def post_halt(req: HaltReq) -> dict:
+    if req.mode not in ("flat", "safe"):
+        raise HTTPException(400, "mode must be 'flat' or 'safe'")
+    _require_key()
+    try:
+        result = strategy.halt(req.mode, req.reason)
+    except Exception as e:
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
+    return {"ok": True, **result}

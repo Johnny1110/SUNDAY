@@ -14,5 +14,19 @@ class Settings(BaseSettings):
     sunday_host: str = "127.0.0.1"
     sunday_port: int = 7777
 
+    # trading / strategy (milestone 1.0 — single symbol, hardcoded)
+    symbol: str = "BTCUSDT"
+    timeframe: str = "1h"
+    ema_fast: int = 20
+    ema_slow: int = 50
+    target_notional_usd: float = 500.0  # size to open per entry (within max_position_usd)
+    leverage: int = 3
+
+    # deterministic risk envelope (hard caps; NOT the LLM's job)
+    max_position_usd: float = 2000.0
+    max_total_exposure_usd: float = 4000.0
+    max_leverage: int = 3
+    stop_pct: float = 0.02
+
 
 settings = Settings()

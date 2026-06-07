@@ -1,7 +1,9 @@
-"""Postgres pool + redis client + a tiny forward-only migration runner.
+"""Postgres pool + redis client + a tiny migration runner + the 1.0 DAO.
 
-T1 only wires connections and applies migrations on startup. Later tasks add the
-DAO methods (orders/fills/positions/signals/...) on top of `pool`.
+Runtime state (mode/rationale) lives in redis; the trade ledger
+(strategy_state/signals/orders/positions/risk_events) lives in postgres.
+The exchange remains the source of truth for actual positions — these tables
+are our attribution/audit record (modeling-grade).
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import pathlib
 
 import redis
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .config import settings
@@ -41,10 +44,7 @@ def close() -> None:
 
 
 def run_migrations() -> list[str]:
-    """Apply un-applied migrations/*.sql in filename order, once each.
-
-    Returns the versions applied on this call (empty when already up to date).
-    """
+    """Apply un-applied migrations/*.sql in filename order, once each."""
     assert pool is not None, "call connect() first"
     with pool.connection() as conn:
         conn.execute(
@@ -63,3 +63,92 @@ def run_migrations() -> list[str]:
             conn.execute("INSERT INTO schema_migrations (version) VALUES (%s)", (path.name,))
         applied.append(path.name)
     return applied
+
+
+# --- runtime state (redis) -------------------------------------------------
+
+def get_mode() -> str:
+    return (rds.get("sunday:mode") if rds else None) or "active"
+
+
+def set_mode(mode: str) -> None:
+    if rds:
+        rds.set("sunday:mode", mode)
+
+
+def get_rationale() -> str | None:
+    return rds.get("sunday:rationale") if rds else None
+
+
+def set_rationale(text: str) -> None:
+    if rds:
+        rds.set("sunday:rationale", text)
+
+
+# --- strategy state --------------------------------------------------------
+
+def set_strategy(symbol: str, strategy: str, reason: str, set_by: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO strategy_state (symbol, strategy, reason, set_by) VALUES (%s,%s,%s,%s)",
+            (symbol, strategy, reason, set_by),
+        )
+
+
+def current_strategy(symbol: str) -> str:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT strategy FROM strategy_state WHERE symbol=%s ORDER BY set_at DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+    return row[0] if row else "flat"
+
+
+# --- ledger ----------------------------------------------------------------
+
+def record_signal(symbol: str, strategy: str, indicators: dict, action: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO signals (symbol, strategy, indicators_json, action) VALUES (%s,%s,%s,%s)",
+            (symbol, strategy, Jsonb(indicators), action),
+        )
+
+
+def record_order(
+    symbol: str, side: str, type_: str, qty: float, price: float | None,
+    status: str, exchange_order_id: str | None, strategy: str, intent: str | None,
+) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO orders (symbol, side, type, qty, price, status, exchange_order_id, strategy, intent)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (symbol, side, type_, qty, price, status, exchange_order_id, strategy, intent),
+        )
+
+
+def record_position_open(
+    symbol: str, side: str, qty: float, entry: float, stop: float | None,
+    strategy: str, entry_reason: str | None,
+) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO positions (symbol, side, qty, entry_price, stop_price, strategy, entry_reason)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (symbol, side, qty, entry, stop, strategy, entry_reason),
+        )
+
+
+def close_open_positions(symbol: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE positions SET closed_at=now() WHERE symbol=%s AND closed_at IS NULL",
+            (symbol,),
+        )
+
+
+def record_risk_event(type_: str, detail: dict, action_taken: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO risk_events (type, detail, action_taken) VALUES (%s,%s,%s)",
+            (type_, Jsonb(detail), action_taken),
+        )
