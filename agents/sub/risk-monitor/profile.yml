@@ -1,0 +1,4 @@
+effort: medium
+when_to_use: "風控監控員 — 定時巡檢曝險/回撤/槓桿對照封套，逼近或越界時告警 friday（不下單、不拉 lever）。"
+inject_memory: false
+advertise_skills: true

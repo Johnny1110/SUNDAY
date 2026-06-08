@@ -1,5 +1,3 @@
 # Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
 # task_get) are injected automatically by the worker role — do NOT list them here.
-- http_request  # read Sunday over its HTTP API + POST /commentary (read-only on levers)
-- web_fetch     # external market context (news / sentiment)
-- web_search
+- http_request  # read Sunday's state over HTTP (read-only; no levers)

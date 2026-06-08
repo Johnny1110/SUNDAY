@@ -1,19 +1,28 @@
-# Sunday — crypto trading supervision swarm (milestone 1.0).
-# friday (leader) supervises the Sunday Python engine (http://127.0.0.1:7777) via
-# bash+curl; analyst assesses market regime on demand. The engine trades; the
-# swarm supervises. Register with: `evva swarm .` (from this dir).
-name: sunday
+name: sunday              # → webhook endpoint POST /api/swarm/sunday/event
 workdir: .
 
 leader:
   agent: friday
   schedule:
     every: 30m
-    prompt: "Dead-man check：POST /heartbeat 給 Sunday，再查 /status。Sunday 活著嗎？倉位/曝險/PnL 正常嗎？無異常就回報並 stand down，別硬找事做。"
+    prompt: "Dead-man check：POST /heartbeat + 查 /status。Sunday 活著嗎？PnL/曝險在封套內嗎？無異常就回報並 stand down。"
 
 workers:
-  - agent: analyst # 市場 / regime 分析師（收事件或被指派時評估，給 friday 建議）
+  - agent: analyst
+  - agent: risk-monitor
+    schedule:
+      every: 30m
+      prompt: "稀疏風控 audit：查 /status·/positions 對照封套，有違規或逼近上限即 send_message 給 friday。沒事 stand down。"
+  - agent: reporter
+    schedule:
+      every: 1h
+      prompt: "產出狀態快照（查 /status、/pnl、/positions），send_message 給 friday。"
+  - agent: reviewer
+    schedule:
+      cron: "0 17 * * *"
+      prompt: "當日復盤：查 /performance、/strategy_history、/pnl，總結當日操作 + 策略建議交 friday。"
 
 settings:
-  permission_mode: bypass # demo 階段 permit-all（不卡審批）；Sunday 端確定性風控 risk.py 仍兜底。正式驗證 A6 時改回 default（讀靠 .evva/permissions.json 放行、lever 跳審批）
+  # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.
+  permission_mode: default
   max_iterations: 50

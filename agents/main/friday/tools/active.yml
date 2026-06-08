@@ -1,5 +1,5 @@
-# Regular evva tools. Swarm tools (task_create/assign/verify, send_message,
-# list_members, schedule_set/clear) are injected automatically by the leader
-# role — do NOT list them here.
-- bash # operate Sunday via curl (see the operate-sunday skill / curl :7777/manual)
-- web_fetch
+# Regular evva tools only. Swarm tools (task_create/assign/verify, send_message,
+# list_members, schedule_set/clear) are injected automatically by the leader role —
+# do NOT list them here.
+- http_request  # operate Sunday over its HTTP API; GET/HEAD auto-allow, lever POSTs ask
+- web_fetch     # pull external context when judging the market

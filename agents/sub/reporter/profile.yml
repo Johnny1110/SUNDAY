@@ -1,0 +1,4 @@
+effort: medium
+when_to_use: "狀態回報員 — 定時產出給人看的狀態快照（策略/倉位/PnL）交給 friday。不下單、不拉 lever。"
+inject_memory: false
+advertise_skills: true

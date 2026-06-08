@@ -49,6 +49,14 @@ resp=$(curl -s -X POST "$BASE/strategy" -H 'Content-Type: application/json' \
 echo "$resp" | grep -q '"resulting_status"' && ok "valid switch returns resulting_status" \
   || bad "valid switch (no resulting_status): $resp"
 
+echo "== /envelope lever (M1.1) =="
+c=$(code -X POST "$BASE/envelope" -H 'Content-Type: application/json' -d '{"max_leverage":2}')
+[ "$c" = "400" ] && ok "envelope missing reason -> 400" || bad "envelope reason guard (got $c)"
+resp=$(curl -s -X POST "$BASE/envelope" -H 'Content-Type: application/json' \
+      -d '{"reason":"smoke test","max_leverage":2}')
+echo "$resp" | grep -q '"envelope"' && ok "envelope set returns resulting_status.envelope" \
+  || bad "envelope set (no envelope): $resp"
+
 echo
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
