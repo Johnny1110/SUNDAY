@@ -34,6 +34,9 @@ curl -s http://127.0.0.1:7777/strategy_history
 
 # 市場動態 commentary feed（analyst 貼文，時間倒序）
 curl -s "http://127.0.0.1:7777/commentary?limit=20"
+
+# 當前風險封套（active caps；未設過則回 config 預設）
+curl -s http://127.0.0.1:7777/envelope
 ```
 
 ## 市場動態 commentary（analyst 專用；無害寫入、auto-allow、非交易 lever）
@@ -61,6 +64,11 @@ curl -sX POST http://127.0.0.1:7777/strategy \
 curl -sX POST http://127.0.0.1:7777/halt \
   -H 'Content-Type: application/json' \
   -d '{"reason":"demo 結束","mode":"flat"}'
+
+# 設風險封套（lever；reason 必填；立即生效於下一輪 reconcile/tick）
+curl -sX POST http://127.0.0.1:7777/envelope \
+  -H 'Content-Type: application/json' \
+  -d '{"max_position_usd":2000,"max_total_exposure_usd":4000,"max_leverage":3,"max_drawdown_pct":5,"stop_pct":0.02,"reason":"testnet 保守封套"}'
 ```
 
 ## liveness（leader 的 dead-man ping）
@@ -78,9 +86,10 @@ Sunday 連續一段時間（預設 90m）收不到 heartbeat → 自動停開新
 - `flat`：空手（既有倉平掉）。
 - **不確定切哪個？查 `GET /advisor`** —— 每策略投票 + regime（trending/ranging/volatile）+ funding + 建議策略，照它決定。
 
-## 風險封套（確定性、Python 層硬擋；1.0 寫死，agent 不能改）
+## 風險封套（確定性、Python 層硬擋）
 
-- 單筆上限 / 總曝險上限 / 最大槓桿 / 進場必掛 stop。**越線一律拒單**（誰下令都擋）。
+- 硬限額：單筆上限 / 總曝險上限 / 最大槓桿 / 進場必掛 stop / **最大回撤熔斷**（觸及 `max_drawdown_pct` → 自動 flatten+lock + 發 `risk_breach`）。**越線一律拒單**（誰下令都擋，即使 agent 越權）。
+- 封套由 **leader 經 `POST /envelope`** 設定（reason 必填、留存給 User）；未設過則用 config 預設。當前值 `GET /envelope`。
 
 ## 下令紀律（重要）
 

@@ -103,6 +103,15 @@ class CommentaryReq(BaseModel):
     body: str
 
 
+class EnvelopeReq(BaseModel):
+    max_position_usd: float
+    max_total_exposure_usd: float
+    max_leverage: float
+    max_drawdown_pct: float
+    stop_pct: float
+    reason: str
+
+
 @app.get("/manual", response_class=PlainTextResponse)
 def manual() -> str:
     return _MANUAL.read_text()
@@ -293,6 +302,48 @@ def post_halt(req: HaltReq) -> dict:
     except Exception as e:
         raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
     return {"ok": True, **result}
+
+
+@app.get("/envelope")
+def get_envelope() -> dict:
+    """The active risk envelope (latest set), or the configured defaults if none set yet."""
+    env = store.current_envelope()
+    if env is None:
+        env = {
+            "max_position_usd": settings.max_position_usd,
+            "max_total_exposure_usd": settings.max_total_exposure_usd,
+            "max_leverage": float(settings.max_leverage),
+            "max_drawdown_pct": settings.max_drawdown_pct,
+            "stop_pct": settings.stop_pct,
+        }
+    return env
+
+
+@app.post("/envelope")
+def post_envelope(req: EnvelopeReq) -> dict:
+    """Risk-envelope lever (leader only): set the hard caps the engine must obey.
+
+    Takes effect on the next reconcile/tick: new entries are gated by the new caps
+    and the drawdown breaker uses the new max_drawdown_pct. reason is stored (User-visible).
+    """
+    if not req.reason.strip():
+        raise HTTPException(400, "reason is required — it is stored for the operator (PRD §7.11)")
+    if min(req.max_position_usd, req.max_total_exposure_usd, req.max_leverage,
+           req.max_drawdown_pct, req.stop_pct) <= 0:
+        raise HTTPException(400, "envelope values must be positive")
+    store.set_envelope(req.max_position_usd, req.max_total_exposure_usd, req.max_leverage,
+                       req.max_drawdown_pct, req.stop_pct, req.reason, "leader")
+    return {
+        "ok": True,
+        "envelope": {
+            "max_position_usd": req.max_position_usd,
+            "max_total_exposure_usd": req.max_total_exposure_usd,
+            "max_leverage": req.max_leverage,
+            "max_drawdown_pct": req.max_drawdown_pct,
+            "stop_pct": req.stop_pct,
+        },
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.post("/heartbeat")

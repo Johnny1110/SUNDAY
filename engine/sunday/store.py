@@ -137,6 +137,31 @@ def current_strategy(symbol: str) -> str:
     return row[0] if row else "flat"
 
 
+# --- risk envelope (the leader's /envelope lever; latest row = active caps) ----
+
+def set_envelope(max_position_usd: float, max_total_exposure_usd: float, max_leverage: float,
+                 max_drawdown_pct: float, stop_pct: float, reason: str | None, set_by: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO risk_envelope (max_position_usd, max_total_exposure_usd, max_leverage,"
+            " max_drawdown_pct, stop_pct, reason, set_by) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (max_position_usd, max_total_exposure_usd, max_leverage, max_drawdown_pct, stop_pct, reason, set_by),
+        )
+
+
+def current_envelope() -> dict | None:
+    """The active envelope (latest row), or None if none set yet (engine uses defaults)."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT max_position_usd, max_total_exposure_usd, max_leverage, max_drawdown_pct, stop_pct"
+            " FROM risk_envelope ORDER BY set_at DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    return {"max_position_usd": float(row[0]), "max_total_exposure_usd": float(row[1]),
+            "max_leverage": float(row[2]), "max_drawdown_pct": float(row[3]), "stop_pct": float(row[4])}
+
+
 # --- ledger ----------------------------------------------------------------
 
 def record_signal(symbol: str, strategy: str, indicators: dict, action: str) -> None:

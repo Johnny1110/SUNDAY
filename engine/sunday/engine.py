@@ -60,6 +60,10 @@ class Engine:
         except Exception:
             return {}
 
+    def _envelope(self) -> risk.Envelope:
+        """Active risk caps: the leader's /envelope lever (via the ledger) overrides the config default."""
+        return self.ledger.get_envelope() or self.cfg.envelope
+
     def notify(self, event: dict) -> object:
         """Fire a webhook event through the sink (post + log live; collect in sim)."""
         return self.sink.emit(event)
@@ -101,7 +105,8 @@ class Engine:
         order = risk.OrderProposal(symbol, "buy" if side == "long" else "sell", qty, price,
                                    has_stop=True, is_entry=True)
         ctx = risk.RiskContext(equity=self.broker.equity(), current_exposure_usd=self.broker.exposure_usd())
-        decision = risk.check_order(order, ctx, self.cfg.envelope)
+        env = self._envelope()
+        decision = risk.check_order(order, ctx, env)
         if not decision.allowed:                       # final line of defence — blocks any over-line order
             self.ledger.record_risk_event(decision.type or "rejected",
                                           {"symbol": symbol, "qty": qty, "price": price,
@@ -112,7 +117,7 @@ class Engine:
         od = self.broker.place_market(symbol, order.side, qty)
         self.ledger.record_order(symbol, order.side, "market", qty, price, od.get("status") or "new",
                                  str(od.get("id")), strat, reason)
-        stop_px = risk.stop_price(side, price, self.cfg.envelope.stop_pct)
+        stop_px = risk.stop_price(side, price, env.stop_pct)
         self.broker.set_stop(symbol, "sell" if side == "long" else "buy", qty, stop_px)
         self.ledger.record_position_open(symbol, side, qty, price, stop_px, strat, reason)
         return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px, "rationale": reason}
@@ -168,10 +173,11 @@ class Engine:
         realized = self.ledger.realized_total()
         peak = self.ledger.equity_peak()
         peak = max(peak, equity) if peak is not None else equity
-        dd = risk.check_drawdown(equity, peak, self.cfg.envelope)
+        env = self._envelope()
+        dd = risk.check_drawdown(equity, peak, env)
         self.ledger.record_pnl_snapshot(equity, realized, unrealized, dd.drawdown_pct)
         if dd.breached and self.ledger.get_mode() == "active":  # flatten + lock, then alert
-            self.halt("flat", f"drawdown {dd.drawdown_pct:.2f}% ≥ {self.cfg.envelope.max_drawdown_pct}%")
+            self.halt("flat", f"drawdown {dd.drawdown_pct:.2f}% ≥ {env.max_drawdown_pct}%")
             self.ledger.record_risk_event("drawdown",
                                           {"equity": equity, "peak": peak, "drawdown_pct": dd.drawdown_pct},
                                           action_taken=dd.action or "flatten_and_lock")

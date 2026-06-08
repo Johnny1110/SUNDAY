@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from . import events, exchange, store
+from . import events, exchange, risk, store
 from .market import Candles
 
 
@@ -131,6 +131,14 @@ class LiveLedger:
 
     def record_pnl_snapshot(self, equity, realized, unrealized, drawdown_pct) -> None:
         store.record_pnl_snapshot(equity, realized, unrealized, drawdown_pct)
+
+    def get_envelope(self) -> risk.Envelope | None:
+        row = store.current_envelope()
+        return risk.Envelope(**row) if row else None
+
+    def set_envelope(self, env: risk.Envelope, reason: str | None, set_by: str) -> None:
+        store.set_envelope(env.max_position_usd, env.max_total_exposure_usd, env.max_leverage,
+                           env.max_drawdown_pct, env.stop_pct, reason, set_by)
 
 
 class WallClock:

@@ -58,11 +58,13 @@ class FakeBroker:
 
 
 class FakeLedger:
-    def __init__(self, strategy="momentum", mode="active", peak=None, hb_age=None, last_regime=None):
+    def __init__(self, strategy="momentum", mode="active", peak=None, hb_age=None,
+                 last_regime=None, envelope=None):
         self._strategy, self._mode, self._peak = strategy, mode, peak
-        self._hb, self._regime = hb_age, last_regime
+        self._hb, self._regime, self._envelope = hb_age, last_regime, envelope
         self.signals = []; self.orders = []; self.positions = []
-        self.risk_events = []; self.pnl = []; self.strategy_sets = []; self.rationale = None
+        self.risk_events = []; self.pnl = []; self.strategy_sets = []
+        self.envelope_sets = []; self.rationale = None
     def current_strategy(self, symbol): return self._strategy
     def set_strategy(self, symbol, strategy, reason, set_by):
         self._strategy = strategy; self.strategy_sets.append((strategy, reason, set_by))
@@ -80,6 +82,8 @@ class FakeLedger:
     def realized_total(self): return 0.0
     def equity_peak(self): return self._peak
     def record_pnl_snapshot(self, equity, realized, unrealized, drawdown_pct): self.pnl.append((equity, drawdown_pct))
+    def get_envelope(self): return self._envelope
+    def set_envelope(self, env, reason, set_by): self._envelope = env; self.envelope_sets.append((env, reason, set_by))
 
 
 class FakeSink:
@@ -129,6 +133,14 @@ class TestReconcile(unittest.TestCase):
         led = FakeLedger(strategy="momentum")
         with self.assertRaises(risk.RiskRejected):
             make(ledger=led, cfg=tiny).reconcile("BTCUSDT")
+        self.assertEqual(led.risk_events[0][1], "order_rejected")
+
+    def test_ledger_envelope_overrides_config_default(self):
+        # the leader's /envelope lever (stored in the ledger) overrides the permissive cfg
+        # default, so an order the default would allow is rejected by the tighter caps.
+        led = FakeLedger(strategy="momentum", envelope=risk.Envelope(max_position_usd=10.0))
+        with self.assertRaises(risk.RiskRejected):
+            make(ledger=led).reconcile("BTCUSDT")              # make() uses default EngineConfig (2000 cap)
         self.assertEqual(led.risk_events[0][1], "order_rejected")
 
 

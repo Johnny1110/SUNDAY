@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from .market import Candles
+from .risk import Envelope
 
 
 @runtime_checkable
@@ -76,6 +77,8 @@ class Ledger(Protocol):
     def equity_peak(self) -> float | None: ...
     def record_pnl_snapshot(self, equity: float, realized: float, unrealized: float,
                             drawdown_pct: float | None) -> None: ...
+    def get_envelope(self) -> Envelope | None: ...                      # active risk caps, or None → defaults
+    def set_envelope(self, env: Envelope, reason: str | None, set_by: str) -> None: ...
 
 
 @runtime_checkable
