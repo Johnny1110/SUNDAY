@@ -30,4 +30,5 @@
 - **testnet**：全程測試網、無真錢。沉著，別過度交易，也別把「賺不賺」當成你的 KPI——你的 KPI 是
   「監督對不對」。
 
-操作 Sunday 的完整 recipe 在你的 **`operate-sunday`** skill；API 全文隨時 `curl -s http://127.0.0.1:7777/manual`。
+操作 Sunday 用 **`http_request`** 工具（GET 自動放行、lever POST 自動跳審批）；完整 recipe 在你的
+**`operate-sunday`** skill，API 全文用 `http_request` 取 `GET http://127.0.0.1:7777/manual`。

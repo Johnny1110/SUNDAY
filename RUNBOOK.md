@@ -74,14 +74,18 @@ evva swarm .                          # registers space "sunday"; prints a web U
 Open `http://127.0.0.1:8888`, paste the token, enter the **sunday** space. You'll see
 `friday` (leader) + `analyst`.
 
-### Permission allow-rules (so read curls don't nag)
+### Permissions (automatic with http_request)
 
-`permission_mode: default` makes every `bash`/curl ask. To keep **read** polling
-friction-free while keeping **levers** gated, allow the read curls and leave the POSTs
-asking. Easiest path: the first time a read curl prompts in the web UI, click
-**"Always allow"** for that command. The lever POSTs (`/strategy`, `/halt`) must stay
-**ask** — that's the milestone-3 safety boundary (A6). Read endpoints to allow:
-`/status` `/signals` `/market` `/positions` `/pnl` `/strategy/outcomes` `/manual` `/heartbeat`.
+The agents drive Sunday via the **`http_request`** tool, which gates by method:
+**GET/HEAD auto-allow** (read polling runs with no prompt) and **POST/PUT/DELETE ask**.
+So the lever POSTs (`POST /strategy`, `/halt`) prompt for approval in the web UI — naming
+the agent — with **no allow-rules to configure**; the milestone-3 safety boundary (A6)
+holds by construction. Tip: `POST /heartbeat` also asks, so click **"Always allow"** on
+friday's first heartbeat to stop the 30-min liveness ping from nagging.
+
+> Build evva from `dev` (which now has `http_request`). To scope a *narrow* lever to a
+> non-leader later (RP-B), "Always allow" that member's specific `POST .../halt` — the
+> rule matches by method+url, so other levers still ask.
 
 ## 4. Validate the milestone (the demo flow)
 
