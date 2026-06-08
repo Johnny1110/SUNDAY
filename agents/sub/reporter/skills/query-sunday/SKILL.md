@@ -2,6 +2,8 @@
 
 Sunday 在 `http://127.0.0.1:7777`。用 **`http_request`** 工具唯讀查詢（GET 自動放行，免審批）。你**不拉任何 lever**。
 
+> **多標的**：引擎跑一籃子（`SUNDAY_SYMBOLS`）。`GET /status` 的 `symbols[]` 每標的一筆；`/signals?symbol=` 逐標的查。
+
 ## 常用唯讀端點
 
 ```jsonc

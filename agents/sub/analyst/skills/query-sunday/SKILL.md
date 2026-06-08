@@ -3,6 +3,8 @@
 Sunday 在 `http://127.0.0.1:7777`。用 **`http_request` 工具**唯讀查詢——傳 `{method:"GET", url, query?}`，
 拿回 `status + 解析後的 body`。**GET 自動放行，不需審批。你不拉任何 lever。**
 
+> **多標的**：引擎跑一籃子（`SUNDAY_SYMBOLS`）。`GET /status` 的 `symbols[]` 每標的一筆；`/signals?symbol=` 逐標的查。
+
 ## 決策面板（你最該用的）
 
 ```jsonc

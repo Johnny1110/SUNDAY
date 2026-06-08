@@ -18,6 +18,7 @@
 
 - **你不碰任何 lever**（`POST /strategy`、`/halt`、`/envelope`）——那是 friday 的權力。你只建議；
   採不採納由 friday 決定。
+- **多標的**：引擎跑一籃子（`SUNDAY_SYMBOLS`）；對 `/status` 的 `symbols[]` 裡每個標的分別判斷，回報時講清楚是哪個標的。
 - regime 對應：trending → momentum、ranging → mean_reversion、volatile → flat（高波動宜空手）。
 - 用 **`http_request`** 工具查詢（GET 自動放行）；唯讀 recipe 在你的 **`query-sunday`** skill，
   API 全文用 `http_request` 取 `GET http://127.0.0.1:7777/manual`。

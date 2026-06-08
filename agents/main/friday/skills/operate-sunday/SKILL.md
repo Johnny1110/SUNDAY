@@ -10,6 +10,9 @@ Sunday 是我們的交易引擎（Binance USDⓈ-M 永續 **testnet**），在 `
 
 ---
 
+> **多標的**：引擎跑一籃子（`SUNDAY_SYMBOLS`）。`GET /status` 的 `symbols[]` 列出每個標的的策略/倉位；
+> 切策略、查 `/signals` 都帶 `symbol`；account 層 lever（halt/envelope/restart）影響整籃。
+
 ## 監督節奏（每次被喚醒都照這個走）
 
 1. **重抓現況** — 別只信喚醒你的 webhook payload（那是「當時」）。先 GET `/status`（+需要時 `/signals`）。

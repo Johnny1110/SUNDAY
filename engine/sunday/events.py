@@ -45,19 +45,20 @@ _REGIME_HINT = {
 }
 
 
-def regime_shift_event(prev_label: str, regime_read, status: dict) -> dict:
-    """Build a self-sufficient regime_shift letter for the leader."""
+def regime_shift_event(symbol: str, prev_label: str, regime_read, status: dict) -> dict:
+    """Build a self-sufficient regime_shift letter for the leader (per symbol)."""
     label = regime_read.label
     strat, why = _REGIME_HINT.get(label, ("flat", "盤性不明"))
-    suggested = (f"盤性由 {prev_label} → {label}（{why}）。考慮把 BTCUSDT 切到 {strat}；"
-                 f"先 `curl :7777/signals` 複核各策略投票再決定，切策略附 reason。")
+    suggested = (f"{symbol} 盤性由 {prev_label} → {label}（{why}）。考慮把 {symbol} 切到 {strat}；"
+                 f"先查 `:7777/signals?symbol={symbol}` 複核各策略投票再決定，切策略附 reason。")
     return build_event(
         "regime_shift",
-        title=f"Regime shift: {prev_label} → {label}",
-        body=f"Sunday 偵測盤性改變（{prev_label} → {label}）。{regime_read.rationale}",
+        title=f"Regime shift [{symbol}]: {prev_label} → {label}",
+        body=f"Sunday 偵測 {symbol} 盤性改變（{prev_label} → {label}）。{regime_read.rationale}",
         status=status,
         rationale=regime_read.rationale,
         suggested_action=suggested,
+        data={"symbol": symbol},
     )
 
 

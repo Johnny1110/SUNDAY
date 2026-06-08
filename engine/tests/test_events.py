@@ -22,10 +22,11 @@ class TestBuildEvent(unittest.TestCase):
 
     def test_regime_shift_event_suggests_matching_strategy(self):
         rr = RegimeRead("ranging", 18.0, 0.9, "ADX low → 震盪")
-        ev = events.regime_shift_event("trending", rr, status={"alive": True})
+        ev = events.regime_shift_event("BTCUSDT", "trending", rr, status={"alive": True})
         self.assertIn("mean_reversion", ev["data"]["suggested_action"])  # ranging → mean_reversion
         self.assertEqual(ev["data"]["status"], {"alive": True})
         self.assertIn("trending → ranging", ev["title"])
+        self.assertEqual(ev["data"]["symbol"], "BTCUSDT")
 
     def test_engine_degraded_event(self):
         ev = events.engine_degraded_event("exchange timeout")

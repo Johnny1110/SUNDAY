@@ -14,5 +14,8 @@ class Settings(BaseSettings):
     sunday_host: str = "127.0.0.1"
     sunday_port: int = 7777
 
+    # Comma-separated USDⓈ-M perp symbols the engine trades (the basket, M1.2).
+    sunday_symbols: str = "BTCUSDT"
+
 
 settings = Settings()

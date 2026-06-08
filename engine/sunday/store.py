@@ -101,16 +101,22 @@ def set_strategy(symbol: str, strategy: str, reason: str, set_by: str) -> None:
         )
 
 
-def last_lever(symbol: str) -> dict | None:
-    """The most recent strategy switch, for /status.last_lever (staleness aid)."""
+def last_lever(symbol: str | None = None) -> dict | None:
+    """The most recent strategy switch (for /status.last_lever staleness aid).
+    symbol=None → the latest switch across the whole basket."""
     with _pool().connection() as c:
-        r = c.execute(
-            "SELECT set_by, strategy, set_at FROM strategy_state WHERE symbol=%s ORDER BY set_at DESC LIMIT 1",
-            (symbol,),
-        ).fetchone()
+        if symbol:
+            r = c.execute(
+                "SELECT set_by, strategy, set_at, symbol FROM strategy_state WHERE symbol=%s ORDER BY set_at DESC LIMIT 1",
+                (symbol,),
+            ).fetchone()
+        else:
+            r = c.execute(
+                "SELECT set_by, strategy, set_at, symbol FROM strategy_state ORDER BY set_at DESC LIMIT 1"
+            ).fetchone()
     if not r:
         return None
-    return {"by": r[0], "what": f"strategy={r[1]}", "at": r[2].isoformat()}
+    return {"by": r[0], "what": f"strategy={r[1]} on {r[3]}", "at": r[2].isoformat()}
 
 
 def strategy_switches(symbol: str, since: datetime | None = None) -> list[dict]:
