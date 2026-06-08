@@ -1,0 +1,5 @@
+# No `model:` — analyst runs against your configured default provider/model.
+effort: high
+when_to_use: "市場 / regime 分析師 — 收到 regime 事件或被 friday 指派時，查行情+新聞，給出方向與策略建議。"
+inject_memory: false
+advertise_skills: true

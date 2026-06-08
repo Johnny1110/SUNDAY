@@ -1,0 +1,5 @@
+# Regular evva tools. Swarm tools (send_message, list_members, my_tasks,
+# task_get) are injected automatically by the worker role — do NOT list them here.
+- bash # read Sunday via curl (see the query-sunday skill)
+- web_fetch
+- web_search

@@ -1,5 +1,7 @@
 # Milestone 1.0 — 最小端到端監督迴路（overview + 任務索引）
 
+> **狀態：✅ 完成（2026-06-07）** — T1–T6 全 commit；端到端 live demo 在 testnet 跑通：`regime_shift → friday → 指派 analyst → analyst 交叉驗證後建議 → friday POST /strategy → Sunday 開倉（momentum short）`。驗收 A1–A8 達 7/8（A6 的 lever-ask 因 demo 階段採 permit-all 暫緩，機制已就位、改回 `default` 即驗）。
+
 > 上層：[`../../sunday-project-prd.md`](../../sunday-project-prd.md) ｜ milestone-1 index：[`../README.md`](../README.md)
 > = 上層 §10 的 **S0**。本資料夾把 1.0 拆成 **session 大小的任務檔（T1–T6）**——**一個 session 做一個 T，不要一次吞整個 milestone**。
 > 繼承上層全部不變量（[`../../../../CLAUDE.md`](../../../../CLAUDE.md) 10 條）。

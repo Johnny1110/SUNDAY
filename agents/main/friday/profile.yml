@@ -1,0 +1,5 @@
+# No `model:` — friday runs against your configured default provider/model.
+effort: high
+when_to_use: "交易團隊 CEO / 風險長 — 監督 Sunday 引擎，行使策略/halt lever，協調 analyst，對 User 負責。"
+inject_memory: false
+advertise_skills: true
