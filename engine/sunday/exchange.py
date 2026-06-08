@@ -1,139 +1,93 @@
-"""Binance USDⓈ-M (perpetual futures) testnet adapter — stdlib only.
+"""Binance USDⓈ-M perpetual **testnet** adapter (ccxt).
 
-PRD invariant: agents never hold exchange keys; only Sunday talks to the exchange.
-This adapter is hand-rolled on ``urllib`` + ``hmac`` rather than ccxt — Gate-1 needs
-a handful of endpoints, and a dependency-free adapter (a) keeps the engine light,
-(b) makes the *signing* unit-testable against Binance's own documented vector, and
-(c) lets public market data run anywhere. ccxt would return as a Gate-2 convenience
-if the endpoint set grows.
-
-The signing helpers (``sign`` / ``build_signed_query``) are module-level pure
-functions so the security-critical part is verified in CI without a live key. The
-``BinanceUSDM`` methods are thin HTTP shells (integration-tested in the user's env
-with real testnet credentials; the auth path can't run in a sandbox).
+Public market data needs no key; balance/positions/orders need the testnet API
+key in .env. Everything stays on testnet (set_sandbox_mode) — milestone 1.0
+never touches mainnet.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
+import ccxt
 
-from .market import Candles
+from .config import settings
 
-TESTNET_BASE = "https://testnet.binancefuture.com"
+_ex: ccxt.binanceusdm | None = None
 
 
-class ExchangeError(RuntimeError):
-    """An exchange call failed; carries the HTTP status + body for the ledger."""
-
-    def __init__(self, status: int | None, body: str):
-        super().__init__(f"exchange error {status}: {body}")
-        self.status = status
-        self.body = body
-
-
-def sign(query_string: str, secret: str) -> str:
-    """HMAC-SHA256 hex of the query string, keyed by the API secret (Binance scheme)."""
-    return hmac.new(secret.encode("utf-8"), query_string.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def build_signed_query(params: dict, secret: str, timestamp: int, recv_window: int = 5000) -> str:
-    """Append recvWindow + timestamp, then the signature over the exact sent string."""
-    full = dict(params)
-    full["recvWindow"] = recv_window
-    full["timestamp"] = timestamp
-    qs = urllib.parse.urlencode(full)
-    return qs + "&signature=" + sign(qs, secret)
+def exchange() -> ccxt.binanceusdm:
+    global _ex
+    if _ex is None:
+        ex = ccxt.binanceusdm(
+            {
+                "apiKey": settings.binance_testnet_key or None,
+                "secret": settings.binance_testnet_secret or None,
+                "enableRateLimit": True,
+                # ccxt gates the (still-working) futures testnet behind this opt-in flag
+                "options": {"defaultType": "future", "disableFuturesSandboxWarning": True},
+            }
+        )
+        ex.set_sandbox_mode(True)  # USDⓈ-M futures testnet
+        _ex = ex
+    return _ex
 
 
-class BinanceUSDM:
-    def __init__(self, key: str = "", secret: str = "", base: str = TESTNET_BASE,
-                 recv_window: int = 5000, timeout: float = 10.0):
-        self.key = key
-        self.secret = secret
-        self.base = base.rstrip("/")
-        self.recv_window = recv_window
-        self.timeout = timeout
+def _sym(symbol: str) -> str:
+    """Map an exchange id (BTCUSDT) to ccxt's unified symbol (BTC/USDT:USDT)."""
+    ex = exchange()
+    if not ex.markets:
+        ex.load_markets()
+    if symbol in ex.markets:
+        return symbol
+    m = ex.markets_by_id.get(symbol)
+    if m:
+        return (m[0] if isinstance(m, list) else m)["symbol"]
+    return symbol
 
-    @classmethod
-    def from_settings(cls, settings) -> "BinanceUSDM":
-        return cls(settings.binance_testnet_key, settings.binance_testnet_secret)
 
-    # --- transport ---------------------------------------------------------
-    def _do(self, req: urllib.request.Request):
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "replace") if e.fp else ""
-            raise ExchangeError(e.code, body) from e
-        except urllib.error.URLError as e:
-            raise ExchangeError(None, str(e.reason)) from e
+def fetch_ohlcv(symbol: str, tf: str = "1h", limit: int = 200) -> list[list]:
+    return exchange().fetch_ohlcv(_sym(symbol), timeframe=tf, limit=limit)
 
-    def _public_get(self, path: str, params: dict):
-        url = f"{self.base}{path}?{urllib.parse.urlencode(params)}"
-        return self._do(urllib.request.Request(url, method="GET"))
 
-    def _signed(self, method: str, path: str, params: dict | None = None):
-        qs = build_signed_query(params or {}, self.secret, int(time.time() * 1000), self.recv_window)
-        url = f"{self.base}{path}?{qs}"
-        return self._do(urllib.request.Request(url, method=method, headers={"X-MBX-APIKEY": self.key}))
+def fetch_ticker(symbol: str) -> dict:
+    return exchange().fetch_ticker(_sym(symbol))
 
-    # --- market data (public; runnable without keys) -----------------------
-    def fetch_klines(self, symbol: str, interval: str = "1h", limit: int = 100) -> Candles:
-        raw = self._public_get("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
-        return Candles.from_klines(raw)
 
-    # --- account / positions (signed) --------------------------------------
-    def positions(self, symbol: str | None = None) -> list[dict]:
-        params = {"symbol": symbol} if symbol else {}
-        rows = self._signed("GET", "/fapi/v2/positionRisk", params)
-        # Keep only non-zero positions; map to Sunday's shape.
-        out = []
-        for r in rows:
-            amt = float(r.get("positionAmt", 0) or 0)
-            if amt == 0:
-                continue
-            out.append({
-                "symbol": r["symbol"],
-                "side": "long" if amt > 0 else "short",
-                "qty": abs(amt),
-                "entry_price": float(r.get("entryPrice", 0) or 0),
-                "mark": float(r.get("markPrice", 0) or 0),
-                "upnl": float(r.get("unRealizedProfit", 0) or 0),
-                "leverage": float(r.get("leverage", 0) or 0),
-            })
-        return out
+def fetch_positions() -> list[dict]:
+    return [p for p in exchange().fetch_positions() if p.get("contracts")]
 
-    def set_leverage(self, symbol: str, leverage: int):
-        return self._signed("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage})
 
-    def wallet_equity_usdt(self) -> float:
-        """USDⓈ-M wallet equity (balance + unrealized PnL) in USDT — for /pnl + drawdown."""
-        rows = self._signed("GET", "/fapi/v2/balance", {})
-        for r in rows:
-            if r.get("asset") == "USDT":
-                return float(r.get("balance", 0) or 0) + float(r.get("crossUnPnl", 0) or 0)
-        return 0.0
+def fetch_balance() -> dict:
+    return exchange().fetch_balance()
 
-    # --- execution (signed) ------------------------------------------------
-    def market_order(self, symbol: str, side: str, qty: float, reduce_only: bool = False) -> dict:
-        params = {"symbol": symbol, "side": side.upper(), "type": "MARKET", "quantity": qty}
-        if reduce_only:
-            params["reduceOnly"] = "true"
-        return self._signed("POST", "/fapi/v1/order", params)
 
-    def stop_market(self, symbol: str, side: str, stop_price: float, qty: float) -> dict:
-        """Exchange-native STOP_MARKET — survives Sunday going down (PRD §7.3)."""
-        return self._signed("POST", "/fapi/v1/order", {
-            "symbol": symbol, "side": side.upper(), "type": "STOP_MARKET",
-            "stopPrice": stop_price, "quantity": qty, "reduceOnly": "true",
-        })
+def set_leverage(symbol: str, leverage: int) -> None:
+    exchange().set_leverage(leverage, _sym(symbol))
 
-    def cancel_all(self, symbol: str) -> dict:
-        return self._signed("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol})
+
+def place_market(symbol: str, side: str, qty: float, reduce_only: bool = False) -> dict:
+    params = {"reduceOnly": True} if reduce_only else {}
+    return exchange().create_order(_sym(symbol), "market", side, qty, params=params)
+
+
+def set_stop(symbol: str, close_side: str, qty: float, stop_price: float) -> dict:
+    # close_side is opposite the position side; reduce-only stop-market.
+    return exchange().create_order(
+        _sym(symbol),
+        "STOP_MARKET",
+        close_side,
+        qty,
+        params={"stopPrice": stop_price, "reduceOnly": True},
+    )
+
+
+def close_position(symbol: str) -> dict | None:
+    target = _sym(symbol)
+    for p in fetch_positions():
+        if p["symbol"] == target and p.get("contracts"):
+            close_side = "sell" if p["side"] == "long" else "buy"
+            return place_market(symbol, close_side, p["contracts"], reduce_only=True)
+    return None
+
+
+def cancel_all_orders(symbol: str) -> None:
+    exchange().cancel_all_orders(_sym(symbol))

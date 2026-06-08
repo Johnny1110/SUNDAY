@@ -1,25 +1,19 @@
-"""Postgres pool + redis client + the ledger DAO.
+"""Postgres pool + redis client + a tiny migration runner + the 1.0 DAO.
 
-The store is deliberately *thin* I/O: it persists/loads rows, but every decision
-(strategy votes, risk, attribution) lives in the pure modules that are unit-tested
-without a database. The DAO methods here are integration-tested in the deployment
-environment (they need a live postgres); they are kept small and parameterised so
-that surface stays low-risk.
-
-Datastore boundary (PRD §7.8): agents never read this DB — they go through the
-HTTP API; Sunday never touches the swarm's .vero. Money/qty are NUMERIC in SQL and
-surface as float here (Gate-1 testnet scale; exact-decimal accounting is a Gate-2
-concern if it ever matters).
+Runtime state (mode/rationale/heartbeat/regime) lives in redis; the trade ledger
+(strategy_state/signals/orders/positions/risk_events/webhook_log) lives in postgres.
+The exchange remains the source of truth for actual positions — these tables are
+our attribution/audit record (modeling-grade).
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
-from datetime import datetime, timezone
+import time
 
 import redis
-from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .config import settings
@@ -75,187 +69,288 @@ def run_migrations() -> list[str]:
     return applied
 
 
-def _pool() -> ConnectionPool:
-    assert pool is not None, "call connect() first"
-    return pool
+# --- runtime state (redis) -------------------------------------------------
+
+def get_mode() -> str:
+    return (rds.get("sunday:mode") if rds else None) or "active"
 
 
-# --- strategy state (the lever audit + current active strategy) ------------
+def set_mode(mode: str) -> None:
+    if rds:
+        rds.set("sunday:mode", mode)
 
-def current_strategy(symbol: str) -> str:
-    """Latest active strategy for a symbol; 'flat' when never set."""
-    with _pool().connection() as c:
-        r = c.execute(
-            "SELECT strategy FROM strategy_state WHERE symbol=%s ORDER BY set_at DESC LIMIT 1",
-            (symbol,),
-        ).fetchone()
-        return r[0] if r else "flat"
 
+def get_rationale() -> str | None:
+    return rds.get("sunday:rationale") if rds else None
+
+
+def set_rationale(text: str) -> None:
+    if rds:
+        rds.set("sunday:rationale", text)
+
+
+def set_heartbeat() -> None:
+    if rds:
+        rds.set("sunday:heartbeat_ts", time.time())
+
+
+def heartbeat_age() -> float | None:
+    """Seconds since the last swarm heartbeat, or None if never seen."""
+    v = rds.get("sunday:heartbeat_ts") if rds else None
+    return (time.time() - float(v)) if v else None
+
+
+def get_last_regime() -> str | None:
+    return rds.get("sunday:last_regime") if rds else None
+
+
+def set_last_regime(regime: str) -> None:
+    if rds:
+        rds.set("sunday:last_regime", regime)
+
+
+def get_last_event_ts() -> str | None:
+    return rds.get("sunday:last_event_ts") if rds else None
+
+
+def set_last_event_ts(ts_iso: str) -> None:
+    if rds:
+        rds.set("sunday:last_event_ts", ts_iso)
+
+
+# --- strategy state --------------------------------------------------------
 
 def set_strategy(symbol: str, strategy: str, reason: str, set_by: str) -> None:
-    """Append a strategy_state row — the lever's durable, User-visible record."""
-    with _pool().connection() as c:
-        c.execute(
+    with pool.connection() as conn:
+        conn.execute(
             "INSERT INTO strategy_state (symbol, strategy, reason, set_by) VALUES (%s,%s,%s,%s)",
             (symbol, strategy, reason, set_by),
         )
 
 
-def last_lever(symbol: str) -> dict | None:
-    """The most recent strategy switch, for /status.last_lever (staleness aid)."""
-    with _pool().connection() as c:
-        r = c.execute(
-            "SELECT set_by, strategy, set_at FROM strategy_state WHERE symbol=%s ORDER BY set_at DESC LIMIT 1",
+def current_strategy(symbol: str) -> str:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT strategy FROM strategy_state WHERE symbol=%s ORDER BY set_at DESC LIMIT 1",
             (symbol,),
         ).fetchone()
-    if not r:
-        return None
-    return {"by": r[0], "what": f"strategy={r[1]}", "at": r[2].isoformat()}
+    return row[0] if row else "flat"
 
 
-def strategy_switches(symbol: str, since: datetime | None = None) -> list[dict]:
-    """strategy_state rows (oldest-first) for attribution.attribute()."""
-    with _pool().connection() as c:
-        cur = c.cursor(row_factory=dict_row)
-        if since:
-            cur.execute(
-                "SELECT symbol, strategy, reason, set_by, set_at FROM strategy_state "
-                "WHERE symbol=%s AND set_at >= %s ORDER BY set_at",
-                (symbol, since),
-            )
-        else:
-            cur.execute(
-                "SELECT symbol, strategy, reason, set_by, set_at FROM strategy_state "
-                "WHERE symbol=%s ORDER BY set_at",
-                (symbol,),
-            )
-        return cur.fetchall()
-
-
-# --- signals / orders / fills / positions / pnl ----------------------------
+# --- ledger ----------------------------------------------------------------
 
 def record_signal(symbol: str, strategy: str, indicators: dict, action: str) -> None:
-    with _pool().connection() as c:
-        c.execute(
+    with pool.connection() as conn:
+        conn.execute(
             "INSERT INTO signals (symbol, strategy, indicators_json, action) VALUES (%s,%s,%s,%s)",
-            (symbol, strategy, json.dumps(indicators), action),
+            (symbol, strategy, Jsonb(indicators), action),
         )
 
 
-def record_order(symbol: str, side: str, type_: str, qty: float, price: float | None,
-                 status: str, strategy: str, intent: str, exchange_order_id: str | None = None) -> int:
-    with _pool().connection() as c:
-        r = c.execute(
-            "INSERT INTO orders (symbol, side, type, qty, price, status, strategy, intent, exchange_order_id) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-            (symbol, side, type_, qty, price, status, strategy, intent, exchange_order_id),
-        ).fetchone()
-        return r[0]
-
-
-def record_fill(order_id: int, symbol: str, qty: float, price: float, strategy: str, fee: float = 0.0) -> None:
-    with _pool().connection() as c:
-        c.execute(
-            "INSERT INTO fills (order_id, symbol, qty, price, fee, strategy) VALUES (%s,%s,%s,%s,%s,%s)",
-            (order_id, symbol, qty, price, fee, strategy),
+def record_order(
+    symbol: str, side: str, type_: str, qty: float, price: float | None,
+    status: str, exchange_order_id: str | None, strategy: str, intent: str | None,
+) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO orders (symbol, side, type, qty, price, status, exchange_order_id, strategy, intent)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (symbol, side, type_, qty, price, status, exchange_order_id, strategy, intent),
         )
 
 
-def open_position(symbol: str, side: str, qty: float, entry_price: float, stop_price: float | None,
-                  strategy: str, entry_reason: str) -> int:
-    with _pool().connection() as c:
-        r = c.execute(
-            "INSERT INTO positions (symbol, side, qty, entry_price, stop_price, strategy, entry_reason) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-            (symbol, side, qty, entry_price, stop_price, strategy, entry_reason),
-        ).fetchone()
-        return r[0]
-
-
-def close_position(position_id: int, realized_pnl: float) -> None:
-    with _pool().connection() as c:
-        c.execute(
-            "UPDATE positions SET closed_at=now(), realized_pnl=%s WHERE id=%s AND closed_at IS NULL",
-            (realized_pnl, position_id),
+def record_position_open(
+    symbol: str, side: str, qty: float, entry: float, stop: float | None,
+    strategy: str, entry_reason: str | None,
+) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO positions (symbol, side, qty, entry_price, stop_price, strategy, entry_reason)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (symbol, side, qty, entry, stop, strategy, entry_reason),
         )
 
 
-def open_positions(symbol: str | None = None) -> list[dict]:
-    with _pool().connection() as c:
-        cur = c.cursor(row_factory=dict_row)
-        if symbol:
-            cur.execute("SELECT * FROM positions WHERE closed_at IS NULL AND symbol=%s", (symbol,))
-        else:
-            cur.execute("SELECT * FROM positions WHERE closed_at IS NULL")
-        return cur.fetchall()
+def close_open_positions(symbol: str, realized_pnl: float | None = None) -> None:
+    """Mark open rows closed; persist realized_pnl (for per-strategy attribution).
+
+    realized_pnl is captured by the caller from the position's unrealizedPnl the
+    instant before closing — the accurate proxy ccxt gives us on testnet without
+    fill-by-fill reconciliation. 1.0/1.1 hold ≤1 open row per symbol, so the
+    single captured value maps cleanly onto the row.
+    """
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE positions SET closed_at=now(), realized_pnl=COALESCE(%s, realized_pnl)"
+            " WHERE symbol=%s AND closed_at IS NULL",
+            (realized_pnl, symbol),
+        )
 
 
-def positions_for_attribution(symbol: str, since: datetime | None = None) -> list[dict]:
-    """All positions (open + closed) for attribution.attribute()."""
-    with _pool().connection() as c:
-        cur = c.cursor(row_factory=dict_row)
-        if since:
-            cur.execute(
-                "SELECT symbol, strategy, qty, entry_price, realized_pnl, opened_at, closed_at "
-                "FROM positions WHERE symbol=%s AND opened_at >= %s ORDER BY opened_at",
-                (symbol, since),
-            )
-        else:
-            cur.execute(
-                "SELECT symbol, strategy, qty, entry_price, realized_pnl, opened_at, closed_at "
-                "FROM positions WHERE symbol=%s ORDER BY opened_at",
-                (symbol,),
-            )
-        return cur.fetchall()
+def record_risk_event(type_: str, detail: dict, action_taken: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO risk_events (type, detail, action_taken) VALUES (%s,%s,%s)",
+            (type_, Jsonb(detail), action_taken),
+        )
 
+
+def record_webhook(
+    event_type: str, to_member: str, title: str | None, body: str | None,
+    http_status: int | None, message_id: str | None,
+) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO webhook_log (event_type, to_member, title, body, http_status, message_id)"
+            " VALUES (%s,%s,%s,%s,%s,%s)",
+            (event_type, to_member, title, body, http_status, message_id),
+        )
+
+
+# --- dashboard data (milestone 2.0) ----------------------------------------
 
 def record_pnl_snapshot(equity: float, realized: float, unrealized: float, drawdown_pct: float | None) -> None:
-    with _pool().connection() as c:
-        c.execute(
+    """One point on the equity curve. Written by the watcher tick (skip on exchange error)."""
+    with pool.connection() as conn:
+        conn.execute(
             "INSERT INTO pnl_snapshots (equity, realized, unrealized, drawdown_pct) VALUES (%s,%s,%s,%s)",
             (equity, realized, unrealized, drawdown_pct),
         )
 
 
-def equity_curve(since: datetime | None = None) -> list[list]:
-    with _pool().connection() as c:
-        if since:
-            rows = c.execute("SELECT ts, equity FROM pnl_snapshots WHERE ts >= %s ORDER BY ts", (since,)).fetchall()
+def equity_peak() -> float | None:
+    """High-water equity over all snapshots (for drawdown_pct)."""
+    with pool.connection() as conn:
+        row = conn.execute("SELECT MAX(equity) FROM pnl_snapshots").fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
+def realized_total(since=None) -> float:
+    """Cumulative realized PnL from closed positions (optionally since a datetime)."""
+    with pool.connection() as conn:
+        if since is not None:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) FROM positions"
+                " WHERE closed_at IS NOT NULL AND closed_at >= %s",
+                (since,),
+            ).fetchone()
         else:
-            rows = c.execute("SELECT ts, equity FROM pnl_snapshots ORDER BY ts").fetchall()
-    return [[r[0].isoformat(), float(r[1])] for r in rows]
+            row = conn.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) FROM positions WHERE closed_at IS NOT NULL"
+            ).fetchone()
+    return float(row[0] or 0)
 
 
-# --- audit: risk events + webhook log --------------------------------------
-
-def record_risk_event(type_: str, detail: dict, action_taken: str) -> None:
-    with _pool().connection() as c:
-        c.execute(
-            "INSERT INTO risk_events (type, detail, action_taken) VALUES (%s,%s,%s)",
-            (type_, json.dumps(detail), action_taken),
-        )
-
-
-def record_webhook(event_type: str, to_member: str, title: str, body: str,
-                   http_status: int | None, message_id: str | None) -> None:
-    with _pool().connection() as c:
-        c.execute(
-            "INSERT INTO webhook_log (event_type, to_member, title, body, http_status, message_id) "
-            "VALUES (%s,%s,%s,%s,%s,%s)",
-            (event_type, to_member, title, body, http_status, message_id),
-        )
+def open_positions_meta_map() -> dict[str, dict]:
+    """symbol -> latest open position's {strategy, entry_reason, stop_price} (for /positions join)."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (symbol) symbol, strategy, entry_reason, stop_price"
+            " FROM positions WHERE closed_at IS NULL ORDER BY symbol, opened_at DESC"
+        ).fetchall()
+    return {
+        r[0]: {
+            "strategy": r[1],
+            "entry_reason": r[2],
+            "stop_price": float(r[3]) if r[3] is not None else None,
+        }
+        for r in rows
+    }
 
 
-# --- redis: swarm heartbeat watchdog (PRD §7.6) ----------------------------
+# --- commentary (analyst's User-facing market notes; harmless write) -------
 
-def set_heartbeat(now: datetime | None = None) -> str:
-    ts = (now or datetime.now(timezone.utc)).isoformat()
-    assert rds is not None, "call connect() first"
-    rds.set(_HEARTBEAT_KEY, ts)
-    return ts
+def record_commentary(author: str, title: str | None, body: str) -> int:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "INSERT INTO commentary (author, title, body) VALUES (%s,%s,%s) RETURNING id",
+            (author, title, body),
+        ).fetchone()
+    return int(row[0])
 
 
-def last_heartbeat() -> datetime | None:
-    assert rds is not None, "call connect() first"
-    raw = rds.get(_HEARTBEAT_KEY)
-    return datetime.fromisoformat(raw) if raw else None
+def list_commentary(since=None, limit: int = 50) -> list[dict]:
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT ts, author, title, body FROM commentary WHERE ts >= %s ORDER BY ts DESC LIMIT %s",
+                (since, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ts, author, title, body FROM commentary ORDER BY ts DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
+    return [{"ts": r[0].isoformat(), "author": r[1], "title": r[2], "body": r[3]} for r in rows]
+
+
+# --- dashboard read aggregations (milestone 2.0 / T2) ----------------------
+
+def equity_curve(since=None) -> list[list]:
+    """[[ts_ms, equity], ...] from pnl_snapshots, oldest first."""
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM ts)*1000, equity FROM pnl_snapshots"
+                " WHERE ts >= %s ORDER BY ts",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM ts)*1000, equity FROM pnl_snapshots ORDER BY ts"
+            ).fetchall()
+    return [[int(r[0]), float(r[1])] for r in rows]
+
+
+def performance(since=None) -> list[dict]:
+    """Per-strategy attribution from closed positions (+ open_qty from open ones)."""
+    clause = "AND closed_at >= %s" if since is not None else ""
+    params = (since,) if since is not None else ()
+    with pool.connection() as conn:
+        closed = conn.execute(
+            "SELECT strategy, COALESCE(SUM(realized_pnl),0), COUNT(*),"
+            " COUNT(*) FILTER (WHERE realized_pnl > 0), AVG(realized_pnl)"
+            f" FROM positions WHERE closed_at IS NOT NULL {clause} GROUP BY strategy",
+            params,
+        ).fetchall()
+        open_rows = conn.execute(
+            "SELECT strategy, COALESCE(SUM(qty),0) FROM positions"
+            " WHERE closed_at IS NULL GROUP BY strategy"
+        ).fetchall()
+    open_qty = {r[0]: float(r[1]) for r in open_rows}
+    out, seen = [], set()
+    for strat, realized, n, wins, avg in closed:
+        seen.add(strat)
+        out.append({
+            "strategy": strat,
+            "realized_pnl": round(float(realized), 4),
+            "n_trades": int(n),
+            "win_rate": round(wins / n, 4) if n else 0.0,
+            "avg_pnl": round(float(avg), 4) if avg is not None else 0.0,
+            "open_qty": open_qty.get(strat, 0.0),
+        })
+    for strat, qty in open_qty.items():  # strategies with only open (no closed) trades
+        if strat not in seen:
+            out.append({"strategy": strat, "realized_pnl": 0.0, "n_trades": 0,
+                        "win_rate": 0.0, "avg_pnl": 0.0, "open_qty": qty})
+    return out
+
+
+def strategy_history(since=None) -> list[dict]:
+    """strategy_state timeline (for the equity-curve switch overlay), oldest first."""
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM set_at)*1000, symbol, strategy, reason, set_by"
+                " FROM strategy_state WHERE set_at >= %s ORDER BY set_at",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM set_at)*1000, symbol, strategy, reason, set_by"
+                " FROM strategy_state ORDER BY set_at"
+            ).fetchall()
+    return [
+        {"set_at_ms": int(r[0]), "symbol": r[1], "strategy": r[2], "reason": r[3], "set_by": r[4]}
+        for r in rows
+    ]

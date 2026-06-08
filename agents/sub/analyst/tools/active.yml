@@ -1,5 +1,5 @@
-# Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
+# Regular evva tools. Swarm tools (send_message, list_members, my_tasks,
 # task_get) are injected automatically by the worker role — do NOT list them here.
-- bash          # query Sunday over curl (read-only; no levers)
-- web_fetch     # external market context (news / sentiment)
+- bash # read Sunday via curl (see the query-sunday skill)
+- web_fetch
 - web_search

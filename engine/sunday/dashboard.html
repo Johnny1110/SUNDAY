@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sunday — Execution Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--line:#222a35;--fg:#e6edf3;--muted:#8b949e;--accent:#4ea1ff;--up:#3fb950;--down:#f85149;--warn:#ffb347}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang TC","Microsoft JhengHei",sans-serif}
+  header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .badge{padding:2px 10px;border-radius:12px;background:var(--panel);border:1px solid var(--line);font-size:12px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle;background:var(--muted)}
+  .grow{flex:1}.muted{color:var(--muted)}
+  main{padding:20px;max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card .k{color:var(--muted);font-size:12px}
+  .card .v{font-size:22px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .panel h2{font-size:12px;margin:0 0 12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+  .chartwrap{height:320px}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .pos{color:var(--up)}.neg{color:var(--down)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .feed-item,.dec-item{padding:10px 0;border-bottom:1px solid var(--line)}
+  .feed-item:last-child,.dec-item:last-child{border-bottom:0}
+  .feed-item .t,.dec-item .t{color:var(--muted);font-size:12px}
+  .dec-item .s{display:inline-block;padding:1px 8px;border-radius:10px;background:#1f2630;border:1px solid var(--line);font-size:12px;margin-right:8px}
+  .empty{color:var(--muted);padding:8px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>☀️ Sunday <span class="muted">execution dashboard · testnet</span></h1>
+  <span class="badge" id="b-mode">mode —</span>
+  <span class="badge" id="b-strat">strategy —</span>
+  <span class="badge" id="b-symbol">—</span>
+  <span class="grow"></span>
+  <span class="badge"><span class="dot" id="hb-dot"></span><span id="hb-text">swarm —</span></span>
+  <span class="muted" id="updated">—</span>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="k">權益 Equity (USDT)</div><div class="v" id="c-equity">—</div></div>
+    <div class="card"><div class="k">已實現 Realized <span id="c-window" class="muted"></span></div><div class="v" id="c-realized">—</div></div>
+    <div class="card"><div class="k">未實現 Unrealized</div><div class="v" id="c-unreal">—</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>權益曲線 · 策略切換疊圖</h2>
+    <div class="chartwrap"><canvas id="chart"></canvas></div>
+    <div id="chart-note" class="empty" style="display:none">尚無權益快照資料（引擎跑一段後出現）。</div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>當前倉位</h2>
+      <table><thead><tr><th>標的</th><th>方向</th><th>數量</th><th>進場</th><th>標記</th><th>未實現</th><th>策略</th><th>Stop</th></tr></thead><tbody id="pos-body"></tbody></table>
+      <div id="pos-empty" class="empty" style="display:none">無持倉（flat）。</div>
+    </div>
+    <div class="panel">
+      <h2>per-strategy 績效歸因</h2>
+      <table><thead><tr><th>策略</th><th>已實現</th><th>筆數</th><th>勝率</th><th>均值</th><th>開倉量</th></tr></thead><tbody id="perf-body"></tbody></table>
+      <div id="perf-empty" class="empty" style="display:none">尚無交易。</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>策略切換決策 · 理由留痕（leader）</h2>
+    <div id="dec-list"></div>
+    <div id="dec-empty" class="empty" style="display:none">尚無切換紀錄。</div>
+  </div>
+
+  <div class="panel">
+    <h2>市場動態 · commentary（analyst）</h2>
+    <div id="feed-list"></div>
+    <div id="feed-empty" class="empty" style="display:none">尚無 commentary。</div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s==null?'':String(s)).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const fmt = (n,d=2) => (n===null||n===undefined||isNaN(n)) ? '—' : Number(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+const sign = n => (n>0?'pos':(n<0?'neg':''));
+const tstr = ms => new Date(ms).toLocaleString([], {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+async function getJSON(p){ const r = await fetch(p,{cache:'no-store'}); if(!r.ok) throw new Error(p+' '+r.status); return r.json(); }
+
+function initChart(){
+  if(!window.Chart) return null;
+  return new Chart($('chart').getContext('2d'), {
+    type:'line',
+    data:{datasets:[
+      {label:'Equity',data:[],parsing:false,borderColor:'#4ea1ff',backgroundColor:'rgba(78,161,255,.12)',fill:true,pointRadius:0,borderWidth:2,tension:.15,order:2},
+      {label:'策略切換',type:'scatter',data:[],parsing:false,borderColor:'#ffb347',backgroundColor:'#ffb347',pointRadius:7,pointHoverRadius:9,pointStyle:'triangle',showLine:false,order:1}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'nearest'},
+      scales:{x:{type:'linear',ticks:{callback:v=>tstr(v),maxRotation:0,autoSkip:true,color:'#8b949e'},grid:{color:'#222a35'}},
+              y:{ticks:{color:'#8b949e'},grid:{color:'#222a35'}}},
+      plugins:{legend:{labels:{color:'#c9d1d9',usePointStyle:true}},
+        tooltip:{callbacks:{
+          title:items=>items.length?new Date(items[0].parsed.x).toLocaleString():'',
+          label:c=>{ if(c.dataset.label==='策略切換'){ const m=c.raw.meta||{}; const r=(m.reason||''); return [`切換 → ${m.strategy} · ${m.set_by}`, r.slice(0,90)+(r.length>90?'…':'')]; } return 'equity '+fmt(c.parsed.y); }
+        }}}}
+  });
+}
+function nearestEquity(curve, ts){
+  if(!curve.length) return null;
+  let best=curve[0], bd=Math.abs(curve[0][0]-ts);
+  for(const p of curve){ const d=Math.abs(p[0]-ts); if(d<bd){bd=d;best=p;} }
+  return best[1];
+}
+
+let chart = initChart();
+if(!chart){ const n=$('chart-note'); n.textContent='Chart.js 載入失敗（離線？）— 下方數據面板仍可用。'; n.style.display='block'; }
+
+async function refresh(){
+  try{
+    const [st,pnl,pos,perf,hist,comm] = await Promise.all([
+      getJSON('/status').catch(()=>({})), getJSON('/pnl').catch(()=>({})),
+      getJSON('/positions').catch(()=>[]), getJSON('/performance').catch(()=>[]),
+      getJSON('/strategy_history').catch(()=>[]), getJSON('/commentary?limit=30').catch(()=>[])
+    ]);
+    $('b-mode').textContent='mode: '+(st.mode||'—');
+    $('b-strat').textContent='strategy: '+(st.strategy||'—');
+    $('b-symbol').textContent=st.symbol||'—';
+    const ok=st.swarm_heartbeat_ok;
+    $('hb-dot').style.background = ok===false?'var(--down)':(ok===true?'var(--up)':'var(--muted)');
+    $('hb-text').textContent='swarm '+(ok===false?'stale':(ok===true?'ok':'—'));
+    $('updated').textContent='更新 '+new Date().toLocaleTimeString();
+
+    $('c-equity').textContent=fmt(pnl.equity);
+    $('c-realized').textContent=fmt(pnl.realized); $('c-realized').className='v '+sign(pnl.realized);
+    $('c-window').textContent=pnl.window_days?`(${pnl.window_days}d)`:'';
+    $('c-unreal').textContent=fmt(pnl.unrealized); $('c-unreal').className='v '+sign(pnl.unrealized);
+
+    const curve=pnl.equity_curve||[];
+    if(chart){
+      chart.data.datasets[0].data = curve.map(p=>({x:p[0],y:p[1]}));
+      chart.data.datasets[1].data = (hist||[]).map(h=>({x:h.set_at_ms,y:nearestEquity(curve,h.set_at_ms),meta:h})).filter(p=>p.y!==null);
+      chart.update('none');
+    }
+    $('chart-note').style.display = curve.length?'none':'block';
+
+    const pb=$('pos-body'); pb.innerHTML='';
+    (pos||[]).forEach(p=>{ const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${esc(p.symbol)}</td><td>${esc(p.side)}</td><td>${fmt(p.qty,3)}</td><td>${fmt(p.entry)}</td><td>${fmt(p.mark)}</td><td class="${sign(p.upnl)}">${fmt(p.upnl)}</td><td>${esc(p.strategy)}</td><td>${fmt(p.stop)}</td>`;
+      pb.appendChild(tr); });
+    $('pos-empty').style.display=(pos&&pos.length)?'none':'block';
+
+    const fb=$('perf-body'); fb.innerHTML='';
+    (perf||[]).forEach(r=>{ const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${esc(r.strategy)}</td><td class="${sign(r.realized_pnl)}">${fmt(r.realized_pnl)}</td><td>${r.n_trades}</td><td>${fmt(r.win_rate*100,1)}%</td><td class="${sign(r.avg_pnl)}">${fmt(r.avg_pnl)}</td><td>${fmt(r.open_qty,3)}</td>`;
+      fb.appendChild(tr); });
+    $('perf-empty').style.display=(perf&&perf.length)?'none':'block';
+
+    const dl=$('dec-list'); dl.innerHTML='';
+    (hist||[]).slice().reverse().forEach(h=>{ const d=document.createElement('div'); d.className='dec-item';
+      d.innerHTML=`<div><span class="s">${esc(h.strategy)}</span><span class="t">${tstr(h.set_at_ms)} · ${esc(h.set_by)}</span></div><div>${esc(h.reason)}</div>`;
+      dl.appendChild(d); });
+    $('dec-empty').style.display=(hist&&hist.length)?'none':'block';
+
+    const cl=$('feed-list'); cl.innerHTML='';
+    (comm||[]).forEach(c=>{ const d=document.createElement('div'); d.className='feed-item';
+      d.innerHTML=`<div class="t">${new Date(c.ts).toLocaleString()} · ${esc(c.author)}</div>${c.title?`<div><b>${esc(c.title)}</b></div>`:''}<div>${esc(c.body)}</div>`;
+      cl.appendChild(d); });
+    $('feed-empty').style.display=(comm&&comm.length)?'none':'block';
+  }catch(e){ console.error(e); }
+}
+refresh();
+setInterval(refresh, 20000);
+</script>
+</body>
+</html>

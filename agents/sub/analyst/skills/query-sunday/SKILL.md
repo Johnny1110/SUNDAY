@@ -1,32 +1,23 @@
-# query-sunday 唯讀查詢 Sunday：決策面板、行情、倉位、損益（諮詢角色用）
+# query-sunday 用 bash+curl 讀 Sunday 交易引擎（唯讀 + 推 commentary，給 friday 建議）
 
-Sunday 在 `http://127.0.0.1:7777`，用 `bash`+`curl` **唯讀**查詢（不需審批）。你**不拉任何 lever**。
+Sunday 在 `http://127.0.0.1:7777`。你**只讀、不下單**（lever 是 friday 的事）。完整 API：`curl -s http://127.0.0.1:7777/manual`。
 
-## 決策面板（你最該用的）
-
-```bash
-# 每個候選策略此刻的投票 + 指標 + regime 讀數——直接讀，別自己算 EMA/RSI
-curl -s 'http://127.0.0.1:7777/signals?symbol=BTCUSDT' | jq '{regime, votes}'
-```
-
-回傳裡：`regime.label`（trending/ranging/volatile）、每個策略的 `vote`（long/short/neutral）、
-`confidence`、`indicators`、`rationale`。**這就是你要的全部判斷材料。**
-
-## 其他唯讀端點
+## 讀（免審批）
 
 ```bash
-curl -s http://127.0.0.1:7777/status     | jq '{strategy, strategy_rationale, position, equity}'
-curl -s 'http://127.0.0.1:7777/market?symbol=BTCUSDT&tf=1h&limit=100' | jq '.ohlcv[-5:]'
-curl -s http://127.0.0.1:7777/positions  | jq
-curl -s 'http://127.0.0.1:7777/pnl?since=2026-06-01' | jq '{unrealized, equity}'
+curl -s http://127.0.0.1:7777/status                                     # 當值策略 + 理由 + 倉位
+curl -s "http://127.0.0.1:7777/market?symbol=BTCUSDT&tf=1h&limit=100"     # OHLCV
+curl -s http://127.0.0.1:7777/positions ; curl -s http://127.0.0.1:7777/pnl   # 倉位 / 損益 + 權益曲線
+curl -s http://127.0.0.1:7777/performance                                # per-strategy 績效歸因
 ```
 
-## 回報 friday 的格式
+## 推市場動態給 User（commentary；無害寫入、免審批、非交易 lever）
 
-查完 `send_message` 給 leader（friday），固定三段：
+評估完 regime 後，除了 `send_message` 給 friday，把**給 User 看的市場脈絡**貼到 commentary feed（顯示在 `:7777/dashboard`）：
 
-> **方向**：偏多 / 偏空 / 中性
-> **建議策略**：momentum / mean_reversion / flat
-> **理由**：依據哪些指標與 regime（例：「ADX 28 趨勢盤、momentum 投 long、spread +0.9% → 建議 momentum」）
+```bash
+curl -sX POST http://127.0.0.1:7777/commentary -H 'Content-Type: application/json' \
+  -d '{"author":"analyst","title":"<一句摘要>","body":"<當前市場動態：regime / 波動 / 風險>"}'
+```
 
-只給建議，**不要嘗試自己下令**。細節：`curl -s http://127.0.0.1:7777/manual`。
+判斷方向後，用 `send_message` 把「**方向 + 建議策略（momentum / flat）+ 理由**」回報給 **friday**（只有 friday 能拉 lever）。

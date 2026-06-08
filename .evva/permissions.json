@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "bash(curl*7777/status*)",
+      "bash(curl*7777/market*)",
+      "bash(curl*7777/positions*)",
+      "bash(curl*7777/pnl*)",
+      "bash(curl*7777/manual*)",
+      "bash(curl*7777/heartbeat*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

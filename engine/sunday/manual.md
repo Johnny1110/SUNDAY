@@ -4,10 +4,8 @@ Sunday 是一個 Binance USDⓈ-M 永續 **testnet** 交易引擎。它自己偵
 你（swarm agent）的工作是**監督**它：查狀態、在 regime 改變時切策略、必要時叫停。
 用通用 `bash` + `curl` 操作。base = `http://127.0.0.1:7777`。
 
-> 單一標的 `BTCUSDT`、1h K 線、策略 `momentum` / `mean_reversion` / `flat`。
-> **人與 agent 讀同一份手冊**——它永遠跟引擎版本一致。
-
----
+> **milestone 1.0**：單一標的 `BTCUSDT`、策略 `momentum` / `flat`。
+> **milestone 2.0（dashboard）**：`/pnl` 回真實 `equity_curve`、新增 `/performance`·`/strategy_history`·`/commentary`，並自服一頁 `/dashboard`。
 
 ## 唯讀（auto-allow，不需審批）
 
@@ -21,16 +19,34 @@ curl -s 'http://127.0.0.1:7777/signals?symbol=BTCUSDT' | jq '.regime, .votes'
 # ★ 切換結果歸因：每次切策略後賺賠多少（PnL / 筆數 / 勝率 / 報酬率）
 curl -s 'http://127.0.0.1:7777/strategy/outcomes?symbol=BTCUSDT' | jq '.episodes[-3:]'
 
-# 行情 / 倉位 / 損益
-curl -s 'http://127.0.0.1:7777/market?symbol=BTCUSDT&tf=1h&limit=100' | jq '.ohlcv[-3:]'
-curl -s http://127.0.0.1:7777/positions | jq
-curl -s 'http://127.0.0.1:7777/pnl?since=2026-06-01' | jq '{unrealized, equity}'
+# 持倉（含 strategy / entry_reason / stop）
+curl -s http://127.0.0.1:7777/positions
+
+# 損益 + 權益曲線（realized 來自 DB、equity/unrealized 即時；equity_curve=[[ts_ms,equity]...]；預設 30 日窗）
+curl -s "http://127.0.0.1:7777/pnl?since=2026-05-09"
+
+# per-strategy 績效歸因（realized_pnl / n_trades / win_rate / avg_pnl / open_qty）
+curl -s http://127.0.0.1:7777/performance
+
+# 策略切換時間軸（含每次切換的 reason，給 dashboard 疊圖）
+curl -s http://127.0.0.1:7777/strategy_history
+
+# 市場動態 commentary feed（analyst 貼文，時間倒序）
+curl -s "http://127.0.0.1:7777/commentary?limit=20"
 ```
 
-`/status` 的關鍵欄位：`as_of_ts`（這份快照的時間）、`last_lever`（最近一次拉桿：誰/什麼/何時 →
-判斷你的視圖是否過期）、`strategy_rationale`（當值策略為何當值）、`votes`（各策略一行投票摘要）。
+## 市場動態 commentary（analyst 專用；無害寫入、auto-allow、非交易 lever）
 
----
+```bash
+# analyst 把當前市場脈絡推給 User（顯示在 dashboard feed）
+curl -sX POST http://127.0.0.1:7777/commentary \
+  -H 'Content-Type: application/json' \
+  -d '{"author":"analyst","title":"BTC regime","body":"波動率下降，盤整偏多"}'
+```
+
+## Dashboard（User 在瀏覽器看；Sunday 自服）
+
+`http://127.0.0.1:7777/dashboard` —— 權益曲線 + 切換理由疊圖、30 日 PnL、倉位、per-strategy 歸因、commentary feed，自動刷新。
 
 ## Lever（POST；需 permission 審批；僅 leader）
 

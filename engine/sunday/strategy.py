@@ -1,126 +1,186 @@
-"""Strategy engine — Gate-1's deliberately-simple strategies (PRD §7.2).
+"""Strategy engine: compute a target position from the active strategy and
+reconcile the live position to match it. Plus the T4 regime watcher + dead-man
+watchdog. Deterministic — the LLM never runs here.
 
-Each strategy can *evaluate* a tape into a Vote WITHOUT placing an order. That
-split is the whole point of the milestone-3 ``/signals`` panel (PRD §7.9): the
-engine can show an agent every candidate strategy's current read — indicators +
-vote + rationale — so the agent decides "switch or not" over the engine's own
-computed features instead of re-deriving them from raw OHLCV by hand. The live
-decision path uses the *active* strategy's ``target_side``; the panel uses
-``vote_all``. Both read the same ``indicators`` module (DRY → the panel is honest).
-
-Gate-1 quality is deliberately not the point (PRD §2.1): these are EMA-cross and
-Bollinger/RSI, on purpose. Alpha is Gate-2's problem, and lives in the *switching
-policy*, not here.
+milestone 1.0 strategies: `momentum` (EMA cross) and `flat`. `mean_reversion`
+lands in 1.1.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from . import events, exchange, risk, store
+from .config import settings
 
-from . import indicators as ind
-from .market import Candles
-
-VALID_STRATEGIES: tuple[str, ...] = ("momentum", "mean_reversion", "flat")
-
-# mean_reversion thresholds (Gate-1 defaults; deliberately simple)
-_Z_BAND = 1.0      # |z| beyond 1σ is "stretched"
-_RSI_OS = 35.0     # oversold
-_RSI_OB = 65.0     # overbought
-# momentum: ignore an EMA spread tighter than this (chop, not a real cross)
-_FLAT_SPREAD_PCT = 0.05
+STRATEGIES = {"momentum", "flat"}  # mean_reversion -> 1.1
 
 
-@dataclass
-class Vote:
-    strategy: str
-    vote: str                # "long" | "short" | "neutral"
-    confidence: float        # 0..1
-    indicators: dict
-    rationale: str
-
-    def as_dict(self) -> dict:
-        return {
-            "strategy": self.strategy,
-            "vote": self.vote,
-            "confidence": round(self.confidence, 3),
-            "indicators": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.indicators.items()},
-            "rationale": self.rationale,
-        }
+def ema(values: list[float], period: int) -> float:
+    k = 2.0 / (period + 1)
+    e = values[0]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+    return e
 
 
-def _clamp01(x: float) -> float:
-    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
-
-
-def _neutral(strategy: str, reason: str, indicators: dict | None = None) -> Vote:
-    return Vote(strategy, "neutral", 0.0, indicators or {}, reason)
-
-
-def evaluate_momentum(c: Candles) -> Vote:
-    ema20 = ind.ema(c.closes, 20)
-    ema50 = ind.ema(c.closes, 50)
-    if ema20 is None or ema50 is None:
-        return _neutral("momentum", "資料不足（需 ≥50 根）")
-    spread_pct = (ema20 - ema50) / ema50 * 100.0 if ema50 else 0.0
-    indicators = {"ema20": ema20, "ema50": ema50, "spread_pct": spread_pct}
-    if abs(spread_pct) < _FLAT_SPREAD_PCT:
-        return _neutral("momentum", f"EMA 糾結（spread {spread_pct:+.2f}%），無趨勢", indicators)
-    side = "long" if spread_pct > 0 else "short"
-    conf = _clamp01(abs(spread_pct) / 2.0)  # ~2% spread → full confidence
-    arrow = ">" if side == "long" else "<"
-    rationale = f"EMA20({ema20:.1f}) {arrow} EMA50({ema50:.1f})，spread {spread_pct:+.2f}% → 順勢{'多' if side == 'long' else '空'}"
-    return Vote("momentum", side, conf, indicators, rationale)
-
-
-def evaluate_mean_reversion(c: Candles) -> Vote:
-    bb = ind.bollinger(c.closes, 20, 2.0)
-    rsi = ind.rsi(c.closes, 14)
-    if bb is None or rsi is None:
-        return _neutral("mean_reversion", "資料不足（需 ≥21 根）")
-    z = bb["z"]
-    indicators = {"rsi14": rsi, "bb_z": z, "bb_upper": bb["upper"], "bb_lower": bb["lower"]}
-    if z <= -_Z_BAND and rsi <= _RSI_OS:
-        conf = _clamp01(abs(z) / 2.0)
-        return Vote("mean_reversion", "long", conf, indicators,
-                    f"超賣：z={z:.2f}（<-{_Z_BAND}）、RSI {rsi:.0f}（≤{_RSI_OS:.0f}）→ 逆勢偏多")
-    if z >= _Z_BAND and rsi >= _RSI_OB:
-        conf = _clamp01(abs(z) / 2.0)
-        return Vote("mean_reversion", "short", conf, indicators,
-                    f"超買：z={z:.2f}（>{_Z_BAND}）、RSI {rsi:.0f}（≥{_RSI_OB:.0f}）→ 逆勢偏空")
-    return _neutral("mean_reversion", f"未觸帶邊：z={z:.2f}、RSI {rsi:.0f}（中性）", indicators)
-
-
-def evaluate_flat(_: Candles) -> Vote:
-    # flat is a deliberate stance, not an absence of opinion — confidence 1.0.
-    return Vote("flat", "neutral", 1.0, {}, "flat：空手，不進場（既有倉平掉）")
-
-
-_EVALUATORS = {
-    "momentum": evaluate_momentum,
-    "mean_reversion": evaluate_mean_reversion,
-    "flat": evaluate_flat,
-}
-
-
-def evaluate(strategy: str, c: Candles) -> Vote:
-    """Vote for one strategy without trading."""
-    fn = _EVALUATORS.get(strategy)
-    if fn is None:
-        raise ValueError(f"unknown strategy: {strategy!r}")
-    return fn(c)
-
-
-def vote_all(c: Candles) -> list[Vote]:
-    """The /signals decision panel: the opinionated candidates (momentum +
-    mean_reversion). flat is omitted — it always abstains, so it adds no signal."""
-    return [evaluate_momentum(c), evaluate_mean_reversion(c)]
-
-
-def target_side(strategy: str, c: Candles) -> str | None:
-    """The side the *active* strategy wants the book to hold: 'long' | 'short' |
-    None (flat / no entry). The executor turns this into a sized order under the
-    envelope; risk.py has the final say."""
+def compute_target(symbol: str, strategy: str) -> dict:
+    """Return {'side': long|short|flat, 'rationale': str, 'indicators': dict}."""
     if strategy == "flat":
-        return None
-    v = evaluate(strategy, c)
-    return None if v.vote == "neutral" else v.vote
+        return {"side": "flat", "rationale": "flat：空手", "indicators": {}}
+    if strategy == "momentum":
+        closes = [c[4] for c in exchange.fetch_ohlcv(symbol, settings.timeframe, settings.ema_slow + 50)]
+        ef = ema(closes, settings.ema_fast)
+        es = ema(closes, settings.ema_slow)
+        side = "long" if ef > es else "short"
+        cmp = ">" if ef > es else "<"
+        rationale = (
+            f"momentum：EMA{settings.ema_fast}={ef:.1f} {cmp} EMA{settings.ema_slow}={es:.1f}"
+            f"（{settings.timeframe}）→ {side}"
+        )
+        return {"side": side, "rationale": rationale, "indicators": {"ema_fast": ef, "ema_slow": es, "close": closes[-1]}}
+    raise ValueError(f"strategy '{strategy}' not available in milestone 1.0")
+
+
+def _current_side(symbol: str) -> str:
+    for p in exchange.fetch_positions():
+        if p["symbol"] == exchange._sym(symbol) and p.get("contracts"):
+            return p["side"]  # long | short
+    return "flat"
+
+
+def _exposure_usd(symbol: str) -> float:
+    total = 0.0
+    for p in exchange.fetch_positions():
+        if p.get("contracts"):
+            total += abs(float(p["contracts"]) * float(p.get("markPrice") or p.get("entryPrice") or 0))
+    return total
+
+
+def _capture_realized(symbol: str) -> float:
+    """Sum unrealizedPnl of open positions for `symbol` — the realized PnL the
+    instant we close them (persisted onto the DB row for attribution)."""
+    total = 0.0
+    for p in exchange.fetch_positions():
+        if p["symbol"] == exchange._sym(symbol) and p.get("contracts"):
+            total += float(p.get("unrealizedPnl") or 0)
+    return total
+
+
+def reconcile(symbol: str, set_by: str = "system") -> dict:
+    """Make the live position match the active strategy's target."""
+    strat = store.current_strategy(symbol)
+    target = compute_target(symbol, strat)
+    action = {"flat": "go_flat", "long": "open_long", "short": "open_short"}[target["side"]]
+    store.record_signal(symbol, strat, target["indicators"], action)
+    store.set_rationale(target["rationale"])
+
+    mode = store.get_mode()
+    current = _current_side(symbol)
+    if target["side"] == current:
+        return {"action": "noop", "side": current, "rationale": target["rationale"]}
+
+    if current != "flat":  # close before flipping / going flat
+        realized = _capture_realized(symbol)
+        exchange.close_position(symbol)
+        exchange.cancel_all_orders(symbol)
+        store.close_open_positions(symbol, realized_pnl=realized)
+
+    if target["side"] == "flat":
+        return {"action": "flat", "rationale": target["rationale"]}
+
+    if mode in ("safe", "halted"):  # frozen: no new entries
+        return {"action": "frozen_no_entry", "mode": mode, "rationale": target["rationale"]}
+
+    return _open(symbol, target["side"], strat, target["rationale"])
+
+
+def _open(symbol: str, side: str, strategy: str, reason: str) -> dict:
+    price = float(exchange.fetch_ticker(symbol)["last"])
+    qty = round(settings.target_notional_usd / price, 3)
+    risk.guard(symbol, qty, price, _exposure_usd(symbol))  # raises RiskRejected + logs if over
+
+    exchange.set_leverage(symbol, settings.leverage)
+    order_side = "buy" if side == "long" else "sell"
+    od = exchange.place_market(symbol, order_side, qty)
+    store.record_order(symbol, order_side, "market", qty, price, od.get("status") or "new", str(od.get("id")), strategy, reason)
+
+    stop_px = risk.stop_price(side, price, settings.stop_pct)
+    close_side = "sell" if side == "long" else "buy"
+    exchange.set_stop(symbol, close_side, qty, stop_px)
+
+    store.record_position_open(symbol, side, qty, price, stop_px, strategy, reason)
+    return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px, "rationale": reason}
+
+
+def halt(mode: str, reason: str) -> dict:
+    """flat = close everything + stop; safe = freeze new entries (keep existing)."""
+    if mode == "flat":
+        realized = _capture_realized(settings.symbol)
+        exchange.close_position(settings.symbol)
+        exchange.cancel_all_orders(settings.symbol)
+        store.close_open_positions(settings.symbol, realized_pnl=realized)
+        store.set_strategy(settings.symbol, "flat", f"halt(flat): {reason}", "system")
+        store.set_mode("halted")
+    elif mode == "safe":
+        store.set_mode("safe")
+    return {"mode": store.get_mode()}
+
+
+# --- regime watcher + dead-man watchdog (T4) -------------------------------
+
+def _detect_regime_and_notify(symbol: str) -> dict:
+    """Emit regime_shift on an EMA-cross flip (debounced via redis last_regime)."""
+    try:
+        target = compute_target(symbol, "momentum")
+    except Exception as e:  # exchange/indicator failure -> tell the leader
+        events.notify("engine_degraded", "engine degraded", f"無法取得行情/指標：{e}", to="leader")
+        return {"degraded": str(e)}
+    regime = target["side"]  # long | short
+    last = store.get_last_regime()
+    if regime != last:
+        store.set_last_regime(regime)
+        if last is not None:  # don't emit on the first-ever baseline
+            events.notify(
+                "regime_shift", f"regime shift → {regime}", target["rationale"],
+                data=target["indicators"], to="leader",
+            )
+            return {"regime": regime, "shifted": True, "prev": last}
+    return {"regime": regime, "shifted": False}
+
+
+def _watchdog_check() -> dict:
+    """If the swarm stopped heartbeating, enter safe-mode (freeze new entries)."""
+    age = store.heartbeat_age()
+    if age is not None and age > settings.heartbeat_timeout_sec and store.get_mode() == "active":
+        store.set_mode("safe")
+        events.notify(
+            "safe_mode_entered", "safe-mode entered",
+            f"swarm heartbeat 逾時 {int(age)}s（>{settings.heartbeat_timeout_sec}s），凍結新倉", to="leader",
+        )
+        return {"safe_mode": True, "age": age}
+    return {"safe_mode": False, "age": age}
+
+
+def _record_pnl_snapshot() -> dict:
+    """Capture one equity-curve point. Skip (don't pollute the curve) on exchange error."""
+    try:
+        bal = exchange.fetch_balance()
+        equity = float((bal.get("total") or {}).get("USDT") or 0.0)
+        unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in exchange.fetch_positions())
+    except Exception as e:
+        return {"recorded": False, "error": str(e)}
+    realized = store.realized_total()
+    peak = store.equity_peak()
+    peak = max(peak, equity) if peak is not None else equity
+    drawdown = round((peak - equity) / peak * 100, 4) if peak and peak > 0 else 0.0
+    store.record_pnl_snapshot(equity, realized, unrealized, drawdown)
+    return {"recorded": True, "equity": equity, "drawdown_pct": drawdown}
+
+
+def tick() -> dict:
+    """One periodic self-check (regime + watchdog + equity snapshot), run by the watcher loop."""
+    sym = settings.symbol
+    return {
+        "regime": _detect_regime_and_notify(sym),
+        "watchdog": _watchdog_check(),
+        "pnl_snapshot": _record_pnl_snapshot(),
+    }
