@@ -73,5 +73,46 @@ class TestApplyStrategy(unittest.TestCase):
         self.assertTrue(body["applied"])
 
 
+class TestApplyEnvelope(unittest.TestCase):
+    def cur(self):
+        return {"max_position_usd": 2000.0, "max_total_exposure_usd": 4000.0,
+                "max_leverage": 3.0, "max_drawdown_pct": 5.0, "stop_pct": 2.0}
+
+    def test_valid_partial_update(self):
+        body, code = views.apply_envelope(self.cur(), {"max_leverage": 2}, "de-risk")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["applied"])
+        self.assertEqual(body["resulting_status"]["envelope"]["max_leverage"], 2.0)
+        self.assertEqual(body["resulting_status"]["envelope"]["max_position_usd"], 2000.0)  # untouched
+
+    def test_reason_required(self):
+        body, code = views.apply_envelope(self.cur(), {"max_leverage": 2}, "  ")
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], "reason_required")
+
+    def test_negative_rejected(self):
+        body, code = views.apply_envelope(self.cur(), {"max_position_usd": -1}, "x")
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], "invalid_envelope")
+
+    def test_non_number_rejected(self):
+        body, code = views.apply_envelope(self.cur(), {"max_leverage": "high"}, "x")
+        self.assertEqual(code, 400)
+
+    def test_bool_rejected(self):
+        body, code = views.apply_envelope(self.cur(), {"max_leverage": True}, "x")
+        self.assertEqual(code, 400)
+
+    def test_unknown_field_ignored(self):
+        body, code = views.apply_envelope(self.cur(), {"max_yolo": 9}, "x")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["applied"])           # nothing real changed
+
+    def test_idempotent_same_value(self):
+        body, code = views.apply_envelope(self.cur(), {"max_leverage": 3.0}, "no-op")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["applied"])
+
+
 if __name__ == "__main__":
     unittest.main()

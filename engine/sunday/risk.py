@@ -18,7 +18,7 @@ gate is then defense-in-depth (it must still pass even if sizing is wrong).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,12 @@ class Envelope:
     max_leverage: float = 3.0
     max_drawdown_pct: float = 5.0
     stop_pct: float = 2.0
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+    # The fields a leader may set via /envelope (all of them; each a hard bound).
+    FIELDS = ("max_position_usd", "max_total_exposure_usd", "max_leverage", "max_drawdown_pct", "stop_pct")
 
 
 DEFAULT_ENVELOPE = Envelope()

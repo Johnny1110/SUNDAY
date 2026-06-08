@@ -246,6 +246,58 @@ def record_webhook(event_type: str, to_member: str, title: str, body: str,
         )
 
 
+# --- risk envelope (the leader's /envelope lever) --------------------------
+
+def get_envelope() -> dict | None:
+    """Latest risk envelope as a dict (the 5 numeric fields), or None if never set."""
+    with _pool().connection() as c:
+        cur = c.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT max_position_usd, max_total_exposure_usd, max_leverage, max_drawdown_pct, stop_pct "
+            "FROM risk_envelope ORDER BY set_at DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+    return {k: float(v) for k, v in row.items()} if row else None
+
+
+def set_envelope(env: dict, reason: str, set_by: str) -> None:
+    with _pool().connection() as c:
+        c.execute(
+            "INSERT INTO risk_envelope (max_position_usd, max_total_exposure_usd, max_leverage, "
+            "max_drawdown_pct, stop_pct, reason, set_by) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (env["max_position_usd"], env["max_total_exposure_usd"], env["max_leverage"],
+             env["max_drawdown_pct"], env["stop_pct"], reason, set_by),
+        )
+
+
+# --- analyst commentary (User-facing feed) + trades read -------------------
+
+def record_commentary(author: str, body: str) -> None:
+    with _pool().connection() as c:
+        c.execute("INSERT INTO commentary (author, body) VALUES (%s,%s)", (author, body))
+
+
+def list_commentary(since: datetime | None = None, limit: int = 50) -> list[dict]:
+    with _pool().connection() as c:
+        cur = c.cursor(row_factory=dict_row)
+        if since:
+            cur.execute("SELECT ts, author, body FROM commentary WHERE ts >= %s ORDER BY ts DESC LIMIT %s", (since, limit))
+        else:
+            cur.execute("SELECT ts, author, body FROM commentary ORDER BY ts DESC LIMIT %s", (limit,))
+        return [{"ts": r["ts"].isoformat(), "author": r["author"], "body": r["body"]} for r in cur.fetchall()]
+
+
+def list_trades(since: datetime | None = None, limit: int = 100) -> list[dict]:
+    with _pool().connection() as c:
+        cur = c.cursor(row_factory=dict_row)
+        if since:
+            cur.execute("SELECT ts, symbol, qty, price, fee, strategy FROM fills WHERE ts >= %s ORDER BY ts DESC LIMIT %s", (since, limit))
+        else:
+            cur.execute("SELECT ts, symbol, qty, price, fee, strategy FROM fills ORDER BY ts DESC LIMIT %s", (limit,))
+        return [{"ts": r["ts"].isoformat(), "symbol": r["symbol"], "qty": float(r["qty"]),
+                 "price": float(r["price"]), "fee": float(r["fee"]), "strategy": r["strategy"]} for r in cur.fetchall()]
+
+
 # --- redis: swarm heartbeat watchdog (PRD §7.6) ----------------------------
 
 def set_heartbeat(now: datetime | None = None) -> str:

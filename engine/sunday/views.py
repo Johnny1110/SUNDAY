@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from . import regime as rg
+from . import risk
 from . import strategy as strat
 from .market import Candles
 
@@ -78,3 +79,23 @@ def apply_strategy(current_strategy: str, requested: str, reason: str | None,
     applied = requested != current_strategy  # idempotent: same strategy = no-op, still ok
     return ({"ok": True, "applied": applied,
              "resulting_status": {"symbol": symbol, "strategy": requested, "reason": reason}}, 200)
+
+
+def apply_envelope(current: dict, updates: dict, reason: str | None) -> tuple[dict, int]:
+    """Defensive /envelope decision (M1.1 lever). Partial updates allowed; every
+    supplied field must be a positive number; unknown keys are ignored rather than
+    failing. Returns (body, http_status); app.py persists + applies on (200, applied).
+    reason is mandatory (stored for the operator, like a strategy switch)."""
+    if not reason or not reason.strip():
+        return ({"ok": False, "error": "reason_required",
+                 "message": "a reason is mandatory — it is stored for the operator"}, 400)
+    merged = dict(current)
+    for k, v in (updates or {}).items():
+        if k not in risk.Envelope.FIELDS:
+            continue  # ignore unknown keys
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            return ({"ok": False, "error": "invalid_envelope",
+                     "message": f"{k} must be a positive number"}, 400)
+        merged[k] = float(v)
+    return ({"ok": True, "applied": merged != current,
+             "resulting_status": {"envelope": merged, "reason": reason}}, 200)

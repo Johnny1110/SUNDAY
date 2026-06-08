@@ -42,7 +42,7 @@ SYMBOL = "BTCUSDT"            # Gate-1 single symbol (PRD §10 / milestone-1.0)
 TIMEFRAME = "1h"
 TICK_SECONDS = 60            # loop cadence; the strategy itself reads 1h bars
 WATCHDOG_MINUTES = 90       # no swarm heartbeat for this long → safe-mode (PRD §7.6)
-ENVELOPE = risk.DEFAULT_ENVELOPE
+# The active risk envelope lives on EngineState.envelope (runtime-settable via /envelope).
 
 
 @dataclass
@@ -54,6 +54,8 @@ class EngineState:
     last_regime_label: str | None = None
     last_event_ts: str | None = None
     last_candles: Candles | None = None
+    envelope: risk.Envelope = risk.DEFAULT_ENVELOPE       # runtime-settable via /envelope
+    last_rollup_date: str | None = None                   # YYYY-MM-DD of last daily_rollup_ready
     stop: threading.Event = field(default_factory=threading.Event)
 
 
@@ -73,6 +75,25 @@ class StrategyBody(BaseModel):
 class HaltBody(BaseModel):
     reason: str
     mode: str = "safe"          # safe (freeze new) | flat (close all)
+
+
+class EnvelopeBody(BaseModel):
+    reason: str | None = None
+    max_position_usd: float | None = None
+    max_total_exposure_usd: float | None = None
+    max_leverage: float | None = None
+    max_drawdown_pct: float | None = None
+    stop_pct: float | None = None
+
+
+class CommentaryBody(BaseModel):
+    body: str
+    author: str = "analyst"
+
+
+class RestartBody(BaseModel):
+    confirm: bool = False
+    reason: str = ""
 
 
 # --- helpers ---------------------------------------------------------------
@@ -130,6 +151,7 @@ def _gather_status() -> dict:
         "last_event_ts": state.last_event_ts,
         "swarm_heartbeat_ok": _heartbeat_ok(),
         "last_lever": store.last_lever(state.symbol),
+        "envelope": state.envelope.as_dict(),
     }
     return views.status_view(base, candles)
 
@@ -147,6 +169,16 @@ def _fire(event: dict) -> None:
 
 # --- the trading loop ------------------------------------------------------
 
+def _maybe_daily_rollup(now: datetime) -> None:
+    """Fire daily_rollup_ready once per day after the review hour — the reviewer's
+    event-driven alternative to its 17:00 timer."""
+    today = now.date().isoformat()
+    if now.hour >= 17 and state.last_rollup_date != today:
+        state.last_rollup_date = today
+        _fire(events.build_event("daily_rollup_ready", title="Daily rollup ready",
+                                 body="當日資料齊備，可復盤。", status=_gather_status(), to="reviewer"))
+
+
 def tick() -> None:
     """One engine cycle. Wrapped by run_loop so a raised error degrades one tick."""
     symbol = state.symbol
@@ -159,6 +191,7 @@ def tick() -> None:
         _fire(events.regime_shift_event(state.last_regime_label, rr, _gather_status()))
     if rr.label != "unknown":
         state.last_regime_label = rr.label
+    _maybe_daily_rollup(_now())
 
     # 2) liveness: no swarm heartbeat → safe-mode floor (PRD §7.6 dead-man)
     if not _heartbeat_ok() and state.mode not in ("safe", "halt"):
@@ -171,7 +204,7 @@ def tick() -> None:
     try:
         equity = ex.wallet_equity_usdt()
         state.peak_equity = max(state.peak_equity, equity)
-        dd = risk.check_drawdown(equity, state.peak_equity, ENVELOPE)
+        dd = risk.check_drawdown(equity, state.peak_equity, state.envelope)
         if dd.breached and not state.locked:
             state.locked = True
             _flatten(reason="drawdown breaker")
@@ -214,16 +247,16 @@ def _reconcile(candles: Candles) -> None:
 def _open(symbol: str, side: str, price: float, strat_name: str, reason: str) -> None:
     """Size within the envelope, gate, then place market entry + native stop."""
     ctx = risk.RiskContext(equity=_safe_equity(), current_exposure_usd=0.0)
-    qty = round(risk.max_allowed_qty(price, ctx, ENVELOPE), 3)
+    qty = round(risk.max_allowed_qty(price, ctx, state.envelope), 3)
     if qty <= 0:
         return
     order_side = "BUY" if side == "long" else "SELL"
     stop_side = "SELL" if side == "long" else "BUY"
-    stop_price = round(price * (1 - ENVELOPE.stop_pct / 100) if side == "long"
-                       else price * (1 + ENVELOPE.stop_pct / 100), 2)
+    stop_price = round(price * (1 - state.envelope.stop_pct / 100) if side == "long"
+                       else price * (1 + state.envelope.stop_pct / 100), 2)
 
     proposal = risk.OrderProposal(symbol, order_side, qty, price, has_stop=True, is_entry=True)
-    decision = risk.check_order(proposal, ctx, ENVELOPE)
+    decision = risk.check_order(proposal, ctx, state.envelope)
     if not decision.allowed:                       # the fuse (PRD §7.3 / V6)
         store.record_risk_event(decision.type or "rejected", {"qty": qty, "price": price}, "reject_order")
         log.warning("risk rejected entry: %s", decision.reason)
@@ -284,6 +317,9 @@ async def lifespan(app: FastAPI):
     store.connect()
     applied = store.run_migrations()
     log.info("migrations applied: %s", applied or "(up to date)")
+    env = store.get_envelope()      # restore the leader's envelope across restarts
+    if env:
+        state.envelope = risk.Envelope(**env)
     state.stop.clear()
     thread = threading.Thread(target=run_loop, name="sunday-loop", daemon=True)
     thread.start()
@@ -396,3 +432,48 @@ def strategy_outcomes(symbol: str = SYMBOL, since: str | None = None) -> dict:
     positions_ = store.positions_for_attribution(symbol, since_dt)
     episodes = attribution.attribute(switches, positions_)
     return {"symbol": symbol, "episodes": [e.as_dict() for e in episodes]}
+
+
+@app.post("/envelope")
+def post_envelope(body: EnvelopeBody) -> Response:
+    updates = {k: v for k, v in body.model_dump().items()
+               if k in risk.Envelope.FIELDS and v is not None}
+    resp, code = views.apply_envelope(state.envelope.as_dict(), updates, body.reason)
+    if code == 200 and resp.get("applied"):
+        new_env = resp["resulting_status"]["envelope"]
+        state.envelope = risk.Envelope(**new_env)
+        store.set_envelope(new_env, body.reason or "", "friday")
+    return JSONResponse(resp, status_code=code)
+
+
+@app.post("/commentary")
+def post_commentary(body: CommentaryBody) -> dict:
+    # analyst's one harmless, User-facing write (PRD §7.11) — not a trading lever.
+    store.record_commentary(body.author, body.body)
+    return {"ok": True}
+
+
+@app.get("/commentary")
+def get_commentary(since: str | None = None) -> dict:
+    since_dt = datetime.fromisoformat(since) if since else None
+    return {"commentary": store.list_commentary(since_dt)}
+
+
+@app.post("/restart")
+def post_restart(body: RestartBody) -> Response:
+    if not body.confirm:
+        return JSONResponse({"ok": False, "error": "confirm_required",
+                             "message": "restart is non-idempotent — pass confirm=true"}, status_code=400)
+    # Reset supervision state + force a re-sync next tick (peak re-seeds from live equity).
+    state.locked = False
+    state.mode = "running"
+    state.last_regime_label = None
+    state.peak_equity = _safe_equity()
+    store.record_risk_event("restart", {"reason": body.reason}, "engine state reset + re-sync")
+    return JSONResponse({"ok": True, "resulting_status": {"mode": state.mode, "locked": state.locked}})
+
+
+@app.get("/trades")
+def get_trades(since: str | None = None) -> dict:
+    since_dt = datetime.fromisoformat(since) if since else None
+    return {"trades": store.list_trades(since_dt)}

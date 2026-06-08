@@ -60,6 +60,20 @@ Sunday 是我們的交易引擎（Binance USDⓈ-M 永續 **testnet**），在 `
   "body": { "reason": "risk_breach 後人工複核，先凍倉", "mode": "safe" } }
 ```
 
+## Lever：設風險封套 / 重啟（**僅你**；POST 會跳審批）
+
+```jsonc
+// 設封套（部分更新，每欄正數，reason 必填）；回 resulting_status.envelope
+{ "method": "POST", "url": "http://127.0.0.1:7777/envelope",
+  "body": { "reason": "regime 轉震盪，縮槓桿避險", "max_leverage": 2 } }
+
+// 重啟（非冪等，需 confirm=true）：解鎖 + re-sync 持倉 + 重抓 equity peak
+{ "method": "POST", "url": "http://127.0.0.1:7777/restart",
+  "body": { "confirm": true, "reason": "Sunday 異常後重啟對帳" } }
+```
+
+- 封套是 Sunday **確定性硬擋**的邊界——你縮緊它，越線的單一律被拒（誰下令都擋）。設兩次同值 = `applied:false`（無害）。
+
 ## 心跳（你的 dead-man ping；timer 每 30m 會叫你做）
 
 ```jsonc
