@@ -10,12 +10,13 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.2",
     "redis>=5.0",
-    "httpx>=0.27",
-    # used from T2+ (exchange adapter / indicators)
-    "ccxt>=4.3",
-    "pandas>=2.2",
-    "numpy>=1.26",
 ]
+# Gate-1 keeps the hot path dependency-free on purpose: indicators are pure Python
+# (no pandas/numpy), the USDⓈ-M adapter is hand-rolled on urllib+hmac (no ccxt), and
+# the webhook uses urllib (no httpx). This makes every decision unit-testable with
+# stdlib only. The heavy quant/ML stack returns as a Gate-2 *modeling* extra.
+[project.optional-dependencies]
+modeling = ["ccxt>=4.3", "pandas>=2.2", "numpy>=1.26"]
 
 [build-system]
 requires = ["setuptools>=68"]

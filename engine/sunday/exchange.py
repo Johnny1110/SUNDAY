@@ -113,6 +113,14 @@ class BinanceUSDM:
     def set_leverage(self, symbol: str, leverage: int):
         return self._signed("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage})
 
+    def wallet_equity_usdt(self) -> float:
+        """USDⓈ-M wallet equity (balance + unrealized PnL) in USDT — for /pnl + drawdown."""
+        rows = self._signed("GET", "/fapi/v2/balance", {})
+        for r in rows:
+            if r.get("asset") == "USDT":
+                return float(r.get("balance", 0) or 0) + float(r.get("crossUnPnl", 0) or 0)
+        return 0.0
+
     # --- execution (signed) ------------------------------------------------
     def market_order(self, symbol: str, side: str, qty: float, reduce_only: bool = False) -> dict:
         params = {"symbol": symbol, "side": side.upper(), "type": "MARKET", "quantity": qty}
