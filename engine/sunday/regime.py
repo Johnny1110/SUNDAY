@@ -5,7 +5,7 @@ strategy switch is even worth an agent's attention (PRD §5: Sunday gates wakes)
 engine loop tracks the last *emitted* label and fires a ``regime_shift`` webhook
 only when ``is_shift`` says it really changed (hysteresis/debounce lives in the
 loop, so this module stays pure and testable). The rationale string is carried
-into both ``/signals`` and the webhook payload — legibility is a hard requirement
+into both ``/advisor`` and the webhook payload — legibility is a hard requirement
 (PRD §7.9): the agent must see *why* the engine thinks the regime turned, not just
 a label.
 """

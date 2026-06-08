@@ -1,9 +1,16 @@
-"""Sunday HTTP service.
+"""Sunday HTTP service — the execution/risk/information substrate's HTTP boundary.
 
-T1: startup (db pool + redis + migrations), /manual, /health.
-T2: /market (public), /positions, /pnl (private).
-T3: /strategy + /halt levers, real /status.
-T4: /heartbeat + background watcher (regime detect -> notify; dead-man watchdog).
+Thin FastAPI layer: the trading logic lives in engine.py (over ports), the pure
+HTTP logic in views.py, the info/desk/ablation chains in feeds/desk/ablation. This
+file only wires endpoints to those + the background watcher.
+
+- read panels (auto-allow for the swarm): /status /desk /advisor /market /positions
+  /pnl /performance /risk /thesis /theses /ablation /trades /events /commentary
+- levers (permission-gated, leader): /thesis (directed execution) /strategy /halt
+  /envelope /heartbeat
+- self-served User dashboard at /dashboard (Vue 3, assets under /ui)
+- background watcher (_tick_once): ingest info-layer feeds → engine self-check
+  (regime/watchdog/equity) → desk notable-score wake → ablation shadow snapshot
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ablation, advisor, desk, engine, exchange, feeds, risk, store, strategy, views
+from . import ablation, advisor, desk, engine, exchange, feeds, risk, store, views
 from .config import settings
 from .market import Candles
 
@@ -118,6 +125,7 @@ class StrategyReq(BaseModel):
     symbol: str = "BTCUSDT"
     strategy: str
     reason: str
+    expected_current: str | None = None  # optimistic concurrency: stale view → 409 (PRD §7.10)
     set_by: str = "leader"  # agents default to 'leader'; the User dashboard sends 'user'
 
 
@@ -169,39 +177,57 @@ def dashboard() -> str:
 
 @app.get("/status")
 def status() -> dict:
+    """Posture across the whole basket (milestone-4). Account-level (mode / equity /
+    aggregated exposure / heartbeat) + a per-symbol `basket` (strategy + active thesis +
+    live position). Top-level symbol/strategy/position mirror the primary symbol for
+    back-compat. Exposure is summed over EVERY position, not just the primary."""
     mode = store.get_mode()
-    strat = store.current_strategy(settings.symbol)
     rationale = store.get_rationale() or "(尚無決策)"
     age = store.heartbeat_age()
     swarm_ok = age is None or age < settings.heartbeat_timeout_sec
-    position = None
+    symbols = settings.symbol_list
+    strat_by = {s: store.current_strategy(s) for s in symbols}
+    thesis_by = {s: store.current_thesis(s) for s in symbols}
+
+    pos_by_unified: dict[str, dict] = {}
     exposure = equity = 0.0
-    leverage = 0
     try:
-        for p in exchange.fetch_positions():
-            if p["symbol"] == exchange._sym(settings.symbol) and p.get("contracts"):
-                position = {
-                    "side": p["side"],
-                    "qty": p["contracts"],
-                    "entry": p.get("entryPrice"),
-                    "mark": p.get("markPrice"),
-                    "upnl": p.get("unrealizedPnl"),
-                }
-                exposure = abs(float(p["contracts"]) * float(p.get("markPrice") or 0))
-                leverage = int(float(p.get("leverage") or settings.leverage))
+        for p in exchange.fetch_positions():           # exchange = source of truth for the book
+            notional = abs(float(p.get("contracts") or 0) * float(p.get("markPrice") or 0))
+            exposure += notional                       # FIX: aggregate the WHOLE basket, not just primary
+            pos_by_unified[p.get("symbol")] = {
+                "side": p.get("side"), "qty": p.get("contracts"), "entry": p.get("entryPrice"),
+                "mark": p.get("markPrice"), "upnl": p.get("unrealizedPnl"),
+            }
         bal = exchange.fetch_balance()
         equity = float((bal.get("total") or {}).get("USDT") or 0.0)
     except Exception as e:
         rationale = f"{rationale} [status: exchange unreachable: {type(e).__name__}]"
+
+    def _pos(sym: str) -> dict | None:
+        return pos_by_unified.get(exchange.to_unified(sym))
+
+    basket = []
+    for s in symbols:
+        t = thesis_by.get(s)
+        basket.append({
+            "symbol": s,
+            "strategy": strat_by.get(s),
+            "thesis": ({"id": t["id"], "direction": t["direction"], "conviction": t["conviction"]}
+                       if t else None),
+            "position": _pos(s),
+        })
+    primary = settings.symbol
     return {
         "alive": True,
         "mode": mode,
-        "symbol": settings.symbol,
-        "strategy": strat,
+        "symbol": primary,                       # back-compat: the primary/default symbol
+        "strategy": strat_by.get(primary),       # back-compat: primary symbol's strategy
         "strategy_rationale": rationale,
-        "position": position,
-        "exposure_usd": exposure,
-        "leverage": leverage,
+        "position": _pos(primary),               # back-compat: primary symbol's position
+        "basket": basket,                        # milestone-4: per-symbol posture across the basket
+        "exposure_usd": exposure,                # aggregated across the whole basket
+        "leverage": round(exposure / equity, 3) if equity > 0 else 0.0,  # effective (= /risk's definition)
         "equity": equity,
         "pnl_day": None,
         "last_event_ts": store.get_last_event_ts(),
@@ -279,7 +305,7 @@ def positions() -> list[dict]:
     for p in raw:
         meta: dict = {}
         for db_sym, m in metas.items():
-            if exchange._sym(db_sym) == p.get("symbol"):
+            if exchange.to_unified(db_sym) == p.get("symbol"):
                 meta = m
                 break
         out.append(
@@ -357,10 +383,16 @@ def get_theses(since: str | None = None, limit: int = 100) -> list[dict]:
 
 @app.post("/strategy")
 def post_strategy(req: StrategyReq) -> dict:
-    if req.strategy not in strategy.STRATEGIES:
-        raise HTTPException(400, f"strategy must be one of {sorted(strategy.STRATEGIES)}")
+    """Strategy lever (leader). Routed through views.apply_strategy: strategy must be
+    valid, reason is mandatory (§7.11), and an optional expected_current gives the agent
+    optimistic concurrency (stale view → 409, not a silent mis-set). Reconciles on success."""
+    current = store.current_strategy(req.symbol)
+    body, code = views.apply_strategy(current, req.strategy, req.reason, req.expected_current, req.symbol)
+    if code != 200:
+        raise HTTPException(code, body["message"])
     _require_key()
-    store.set_strategy(req.symbol, req.strategy, req.reason, set_by=req.set_by)
+    if body["applied"]:  # idempotent: a no-op switch writes no duplicate strategy_state row
+        store.set_strategy(req.symbol, req.strategy, req.reason, set_by=req.set_by)
     store.set_mode("active")
     try:
         result = engine.reconcile(req.symbol, set_by=req.set_by)
@@ -372,6 +404,7 @@ def post_strategy(req: StrategyReq) -> dict:
         "ok": True,
         "symbol": req.symbol,
         "strategy": req.strategy,
+        "applied": body["applied"],
         "applied_at": datetime.now(timezone.utc).isoformat(),
         "result": result,
     }

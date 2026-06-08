@@ -44,6 +44,13 @@ def _sym(symbol: str) -> str:
     return symbol
 
 
+def to_unified(symbol: str) -> str:
+    """Public: map an exchange id (BTCUSDT) → ccxt's unified symbol (BTC/USDT:USDT).
+    The HTTP layer (app.py) uses this to match basket symbols against position rows
+    without reaching into the private `_sym`."""
+    return _sym(symbol)
+
+
 def fetch_ohlcv(symbol: str, tf: str = "1h", limit: int = 200) -> list[list]:
     return exchange().fetch_ohlcv(_sym(symbol), timeframe=tf, limit=limit)
 

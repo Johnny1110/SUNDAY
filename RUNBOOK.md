@@ -11,9 +11,9 @@ service — none of which exist in the CI sandbox).
 
 | Layer | How it's verified | Where |
 | --- | --- | --- |
-| indicators / strategy / regime / risk / attribution / events / exchange-signing / execution / views | **79 unit tests, stdlib only** — run anywhere | `./scripts/run-tests.sh` |
+| indicators / strategy / regime / risk / attribution / events / execution / views / desk / feeds / ablation / advisor | **128 unit tests, stdlib only** — run anywhere | `./scripts/run-tests.sh` |
 | store.py / app.py (psycopg + FastAPI wiring) | syntax-checked (`py_compile`); **integration-tested by you** | `./scripts/smoke.sh` against a running engine |
-| swarm supervision e2e (agent reads `/signals`, pulls a lever, …) | **manual validation by you** in the web UI | §4 below |
+| swarm supervision e2e (agent reads `/desk`·`/advisor`, pulls a lever, …) | **manual validation by you** in the web UI | §4 below |
 
 > Honest boundary: I could not run the FastAPI app or hit the testnet account API in
 > the build sandbox (no pip/postgres/redis/docker). Everything below is written to be
@@ -57,9 +57,9 @@ python -m sunday                      # serves :7777, runs migrations, starts th
 Validate the HTTP contract (engine only, no swarm needed):
 
 ```bash
-./scripts/run-tests.sh                # 79 unit tests, green
-./scripts/smoke.sh                    # curls :7777 — checks /signals, /status, and the
-                                      # defensive /strategy (reason→400, stale→409, ok→resulting_status)
+./scripts/run-tests.sh                # 128 unit tests, green
+./scripts/smoke.sh                    # curls :7777 — checks /desk·/advisor·/status + the defensive
+                                      # /strategy & /thesis (reason→400, stale→409, valid→applied)
 ```
 
 ## 3. Run the swarm (the supervisors)
@@ -95,9 +95,9 @@ The DoD loop (milestone-1.0 §1): **regime_shift → friday → analyst → /str
    `friday`. (To force one for testing, you can switch the active strategy or restart so the
    first classification differs — or inject a webhook: `curl -X POST
    :8888/api/swarm/sunday/event -d '{"title":"regime_shift","body":"test","to":"friday"}'`.)
-2. **A1 — no hand-math.** Watch friday/analyst read `GET /signals` and reason over the
-   panel (votes + indicators + regime) — they should **not** pipe curl into python to compute
-   EMAs. (This is the milestone-3 win.)
+2. **A1 — no hand-math.** Watch friday/analyst read `GET /advisor` (and `GET /desk`) and reason
+   over the panel (votes + indicators + regime + funding) — they should **not** pipe curl into
+   python to compute EMAs. (This is the milestone-3 legibility win, carried into the desk.)
 3. **A2 — switch + verify from response.** friday `POST /strategy` (with a `reason`); the
    200 body carries `resulting_status.strategy` — it verifies without a second curl.
 4. **A3 — stale guard.** If friday sends an out-of-date `expected_current`, it gets a 409 +

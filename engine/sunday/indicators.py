@@ -7,7 +7,7 @@ small and implemented in plain Python — no numpy/pandas. Two reasons:
 2. every signal becomes unit-testable in any environment (stdlib only).
 
 The SAME functions back both the live strategy decision (``strategy.py``) and the
-``/signals`` decision-support panel (``app.py``), so an agent reasons over exactly
+``/advisor`` decision-support panel (via ``advisor.py``), so an agent reasons over exactly
 the numbers the engine acted on — that DRY is what makes the panel honest
 (PRD §7.9 legibility). pandas/numpy return as a Gate-2 *modeling* extra, not here.
 

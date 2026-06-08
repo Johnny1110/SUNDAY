@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 
-from . import events, store
-from .config import settings
+# events / store / config.settings are imported lazily inside check_notable_and_notify
+# so the PURE scoring (notable_score / build_basket / …) stays importable stdlib-only.
 
 log = logging.getLogger("sunday")
 
@@ -105,6 +105,8 @@ def check_notable_and_notify(symbols: list[str]) -> dict:
     """Read stored metrics, score each symbol, and emit a webhook on a fresh threshold
     crossing (debounced per symbol). info-OFF symbols (ablation) never wake the desk.
     Never raises — a desk hiccup must not kill the watcher."""
+    from . import events, store
+    from .config import settings
     fired: dict[str, str] = {}
     try:
         metrics_map = store.latest_perp_metrics_all()

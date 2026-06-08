@@ -83,12 +83,6 @@ class TestFlatAndApi(unittest.TestCase):
         votes = strat.vote_all(candles([float(i) for i in range(1, 80)]))
         self.assertEqual([v.strategy for v in votes], ["momentum", "mean_reversion"])
 
-    def test_target_side_follows_active_strategy(self):
-        up = candles([float(i) for i in range(1, 80)])
-        self.assertEqual(strat.target_side("momentum", up), "long")
-        self.assertIsNone(strat.target_side("flat", up))
-        self.assertIsNone(strat.target_side("momentum", candles([100.0] * 80)))
-
     def test_vote_as_dict_rounds(self):
         d = strat.evaluate("momentum", candles([float(i) for i in range(1, 80)])).as_dict()
         self.assertEqual(set(d), {"strategy", "vote", "confidence", "indicators", "rationale"})

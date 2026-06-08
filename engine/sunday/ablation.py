@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import logging
 
-from . import exchange, store
-from .config import settings
+# exchange / store / config.settings are imported lazily inside snapshot_shadows so the
+# PURE baseline math + report assembly (buy_hold_index / carry_step / build_report) stays
+# importable + unit-testable stdlib-only.
 
 log = logging.getLogger("sunday")
 
@@ -45,6 +46,8 @@ def carry_step(prev_equity: float, funding_yield_per_period: float | None) -> fl
 def snapshot_shadows(symbols: list[str]) -> dict:
     """Compute + persist one shadow point per baseline. Never raises (a shadow hiccup
     must not kill the watcher)."""
+    from . import exchange, store
+    from .config import settings
     out: dict = {}
     try:
         current = {}

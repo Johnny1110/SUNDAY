@@ -13,33 +13,6 @@ def candles(closes):
                    list(map(float, closes)), [1.0] * n)
 
 
-class TestVotes(unittest.TestCase):
-    def test_momentum_uptrend_long(self):
-        self.assertEqual(advisor.momentum_vote([float(i) for i in range(1, 80)])["vote"], "long")
-
-    def test_momentum_downtrend_short(self):
-        self.assertEqual(advisor.momentum_vote([float(i) for i in range(80, 1, -1)])["vote"], "short")
-
-    def test_momentum_flat_neutral(self):
-        self.assertEqual(advisor.momentum_vote([100.0] * 80)["vote"], "neutral")
-
-    def test_momentum_insufficient(self):
-        v = advisor.momentum_vote([1.0, 2.0, 3.0])
-        self.assertEqual(v["vote"], "neutral")
-        self.assertIn("資料不足", v["rationale"])
-
-    def test_mean_reversion_oversold_long(self):
-        v = advisor.mean_reversion_vote([100.0] * 30 + [98, 96, 94, 92, 90])
-        self.assertEqual(v["vote"], "long")
-
-    def test_mean_reversion_overbought_short(self):
-        v = advisor.mean_reversion_vote([100.0] * 30 + [102, 104, 106, 108, 110])
-        self.assertEqual(v["vote"], "short")
-
-    def test_mean_reversion_quiet_neutral(self):
-        self.assertEqual(advisor.mean_reversion_vote([100.0] * 40)["vote"], "neutral")
-
-
 class TestFunding(unittest.TestCase):
     def test_high_positive_favors_short(self):
         f = advisor.funding_context(0.001)

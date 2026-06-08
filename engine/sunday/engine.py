@@ -2,7 +2,7 @@
 
 `Engine` holds the ports (market / broker / ledger / sink / clock) + an
 `EngineConfig` and runs the supervision loop: read the tape → pure decision
-(strategy.target_side, execution.plan_transition) → apply to the book under the
+(strategy.evaluate, execution.plan_transition) → apply to the book under the
 deterministic risk fuses (risk.check_order / check_drawdown). It imports only the
 PURE core + ports + stdlib (NOT config/exchange/store), so the whole loop is
 unit-testable with fakes — which is exactly what the Gate-2 backtest does: a sim
@@ -82,49 +82,61 @@ class Engine:
         target = vote.vote if vote.vote in ("long", "short") else None
         self.ledger.record_signal(symbol, strat, vote.indicators, _ACTION_LABEL[target])
         self.ledger.set_rationale(vote.rationale)
+        return self._apply_target(symbol, target, vote.rationale,
+                                  lambda: self._open(symbol, target, strat, vote.rationale))
 
+    def _apply_target(self, symbol: str, target: str | None, reason: str, enter) -> dict:
+        """Shared transition: given a decided target side + reason, make the book match it.
+        The one place hold/close/flip/freeze is decided — baseline and directed both route
+        through here; they differ only in `enter` (how the new position is sized/stopped)."""
         current = self.broker.current_side(symbol)
         action = execution.plan_transition(current, target)
         if action == execution.HOLD:
-            return {"action": "noop", "side": current, "rationale": vote.rationale}
-
+            return {"action": "noop", "side": current, "rationale": reason}
         if action in (execution.CLOSE, execution.FLIP_LONG, execution.FLIP_SHORT):
             realized = self.broker.capture_realized(symbol)
             self.broker.close(symbol)
             self.broker.cancel_stops(symbol)
             self.ledger.close_open_positions(symbol, realized_pnl=realized)
-
         if target is None:
-            return {"action": "flat", "rationale": vote.rationale}
-
+            return {"action": "flat", "rationale": reason}
         mode = self.ledger.get_mode()
         if mode in ("safe", "halted"):                 # frozen: no new entries
-            return {"action": "frozen_no_entry", "mode": mode, "rationale": vote.rationale}
+            return {"action": "frozen_no_entry", "mode": mode, "rationale": reason}
+        return enter()
 
-        return self._open(symbol, target, strat, vote.rationale)
-
-    def _open(self, symbol: str, side: str, strat: str, reason: str) -> dict:
-        price = self.market.ticker(symbol)
-        qty = round(self.cfg.target_notional_usd / price, 3)
+    def _enter(self, symbol: str, side: str, qty: float, price: float, env: risk.Envelope,
+               strat_label: str, reason: str, stop_px: float,
+               thesis_id: int | None = None, extra: dict | None = None) -> dict:
+        """The single live risk-gated entry path (invariant 7): gate the order through the
+        deterministic fuse, then place it + its stop + record the open. Baseline and directed
+        differ only in how `qty`/`stop_px` were computed and the `thesis_id`/`extra` tags —
+        every entry, whoever ordered it, passes through this one fuse."""
         order = risk.OrderProposal(symbol, "buy" if side == "long" else "sell", qty, price,
                                    has_stop=True, is_entry=True)
         ctx = risk.RiskContext(equity=self.broker.equity(), current_exposure_usd=self.broker.exposure_usd())
-        env = self._envelope()
         decision = risk.check_order(order, ctx, env)
         if not decision.allowed:                       # final line of defence — blocks any over-line order
             self.ledger.record_risk_event(decision.type or "rejected",
                                           {"symbol": symbol, "qty": qty, "price": price,
                                            "violations": decision.violations}, action_taken="order_rejected")
             raise risk.RiskRejected(f"{decision.type}: {decision.violations}")
-
         self.broker.set_leverage(symbol, self.cfg.leverage)
         od = self.broker.place_market(symbol, order.side, qty)
         self.ledger.record_order(symbol, order.side, "market", qty, price, od.get("status") or "new",
-                                 str(od.get("id")), strat, reason)
-        stop_px = risk.stop_price(side, price, env.stop_pct)
+                                 str(od.get("id")), strat_label, reason)
         self.broker.set_stop(symbol, "sell" if side == "long" else "buy", qty, stop_px)
-        self.ledger.record_position_open(symbol, side, qty, price, stop_px, strat, reason)
-        return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px, "rationale": reason}
+        self.ledger.record_position_open(symbol, side, qty, price, stop_px, strat_label, reason, thesis_id=thesis_id)
+        return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px,
+                "rationale": reason, **(extra or {})}
+
+    def _open(self, symbol: str, side: str, strat: str, reason: str) -> dict:
+        """Baseline (momentum/mean_reversion) entry: fixed target-notional sizing + pct stop."""
+        price = self.market.ticker(symbol)
+        env = self._envelope()
+        qty = round(self.cfg.target_notional_usd / price, 3)
+        stop_px = risk.stop_price(side, price, env.stop_pct)
+        return self._enter(symbol, side, qty, price, env, strat, reason, stop_px)
 
     # --- directed mode (milestone-4): the swarm's thesis drives the target -------
 
@@ -149,49 +161,22 @@ class Engine:
                                   {"conviction": conviction, "direction": (thesis.get("direction") if thesis else "flat")},
                                   _ACTION_LABEL[target])
         self.ledger.set_rationale(reason)
-
-        current = self.broker.current_side(symbol)
-        action = execution.plan_transition(current, target)
-        if action == execution.HOLD:
-            return {"action": "noop", "side": current, "rationale": reason}
-        if action in (execution.CLOSE, execution.FLIP_LONG, execution.FLIP_SHORT):
-            realized = self.broker.capture_realized(symbol)
-            self.broker.close(symbol)
-            self.broker.cancel_stops(symbol)
-            self.ledger.close_open_positions(symbol, realized_pnl=realized)
-        if target is None:
-            return {"action": "flat", "rationale": reason}
-        mode = self.ledger.get_mode()
-        if mode in ("safe", "halted"):
-            return {"action": "frozen_no_entry", "mode": mode, "rationale": reason}
-        return self._open_directed(symbol, target, conviction, thesis, reason)
+        return self._apply_target(symbol, target, reason,
+                                  lambda: self._open_directed(symbol, target, conviction, thesis, reason))
 
     def _open_directed(self, symbol: str, side: str, conviction: float, thesis: dict | None, reason: str) -> dict:
+        """Directed entry: conviction→size + thesis invalidation_price as the stop (fall back
+        to the pct stop). Same fuse as baseline via _enter — a too-large thesis is rejected."""
         price = self.market.ticker(symbol)
         env = self._envelope()
         qty = risk.size_from_conviction(conviction, price, env, self.cfg.conviction_floor)
         if qty <= 0:
             return {"action": "flat", "rationale": f"{reason} (size 0)"}
-        order = risk.OrderProposal(symbol, "buy" if side == "long" else "sell", qty, price,
-                                   has_stop=True, is_entry=True)
-        ctx = risk.RiskContext(equity=self.broker.equity(), current_exposure_usd=self.broker.exposure_usd())
-        decision = risk.check_order(order, ctx, env)
-        if not decision.allowed:                       # final line of defence — same fuse as momentum/mr
-            self.ledger.record_risk_event(decision.type or "rejected",
-                                          {"symbol": symbol, "qty": qty, "price": price,
-                                           "violations": decision.violations}, action_taken="order_rejected")
-            raise risk.RiskRejected(f"{decision.type}: {decision.violations}")
-        self.broker.set_leverage(symbol, self.cfg.leverage)
-        od = self.broker.place_market(symbol, order.side, qty)
-        self.ledger.record_order(symbol, order.side, "market", qty, price, od.get("status") or "new",
-                                 str(od.get("id")), "directed", reason)
         tid = thesis.get("id") if thesis else None
         inval = thesis.get("invalidation_price") if thesis else None
         stop_px = float(inval) if inval else risk.stop_price(side, price, env.stop_pct)
-        self.broker.set_stop(symbol, "sell" if side == "long" else "buy", qty, stop_px)
-        self.ledger.record_position_open(symbol, side, qty, price, stop_px, "directed", reason, thesis_id=tid)
-        return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px,
-                "conviction": conviction, "thesis_id": tid, "rationale": reason}
+        return self._enter(symbol, side, qty, price, env, "directed", reason, stop_px,
+                           thesis_id=tid, extra={"conviction": conviction, "thesis_id": tid})
 
     def halt(self, mode: str, reason: str, set_by: str = "system") -> dict:
         """flat = close the WHOLE basket + cancel stops + invalidate active theses;

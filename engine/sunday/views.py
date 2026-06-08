@@ -1,60 +1,30 @@
 """Pure response builders + the lever state-machine, separated from FastAPI.
 
 Keeping the HTTP *logic* here (and the FastAPI decorators + DB calls thin in
-app.py) is what lets the milestone-3 acceptance behaviours be unit-tested without
-a server or a database:
+app.py) is what lets the lever/panel behaviours be unit-tested without a server
+or a database:
 
-  * ``signals_view``  — the /signals decision panel (M3-T1): regime + each
-    candidate strategy's vote, derived, so an agent never re-computes indicators.
-  * ``status_view``   — /status enhanced with as_of_ts + last_lever + a votes
-    summary (M3-T1/T4) so the agent can tell whether its view is stale.
-  * ``apply_strategy`` — the defensive /strategy state machine (M3-T4): reason
-    required, idempotent set, and ``expected_current`` optimistic concurrency that
-    turns a stale switch into a correctable 409 instead of a silent mis-set.
+  * ``risk_view``      — the /risk panel: active caps vs a best-effort live read
+    + per-cap utilization + current violations + the recent deterministic-fuse log.
+  * ``apply_strategy`` — the defensive /strategy state machine: reason required,
+    idempotent set, and ``expected_current`` optimistic concurrency that turns a
+    stale switch into a correctable 409 instead of a silent mis-set.
+  * ``validate_thesis`` — the defensive /thesis input check (direction in range,
+    conviction a number in [0,1], reason mandatory) — milestone-4's thesis-lever guard.
 
-app.py performs side effects (DB writes, repositioning) only when ``apply_strategy``
-returns 200 + applied=True; the pure function never touches I/O.
+app.py performs side effects (DB writes, repositioning) only when these return
+200 + applied/ok; the pure functions never touch I/O.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from . import regime as rg
 from . import strategy as strat
-from .market import Candles
 
 
 def _iso(dt: datetime | None = None) -> str:
     return (dt or datetime.now(timezone.utc)).isoformat()
-
-
-def votes_summary(candles: Candles) -> list[dict]:
-    """One terse line per candidate strategy, for /status (the full panel is /signals)."""
-    return [{"strategy": v.strategy, "vote": v.vote, "confidence": round(v.confidence, 3)}
-            for v in strat.vote_all(candles)]
-
-
-def signals_view(symbol: str, candles: Candles, active_strategy: str, as_of: datetime | None = None) -> dict:
-    """The /signals decision-support panel (M3-T1)."""
-    return {
-        "as_of_ts": _iso(as_of),
-        "symbol": symbol,
-        "regime": rg.classify(candles).as_dict(),
-        "active": active_strategy,
-        "votes": [v.as_dict() for v in strat.vote_all(candles)],
-    }
-
-
-def status_view(state: dict, candles: Candles | None = None, as_of: datetime | None = None) -> dict:
-    """/status enhanced. ``state`` carries the live engine fields; this adds the
-    milestone-3 legibility bits (as_of_ts, last_lever, votes summary)."""
-    out = dict(state)
-    out["as_of_ts"] = _iso(as_of)
-    out.setdefault("last_lever", state.get("last_lever"))
-    if candles is not None:
-        out["votes"] = votes_summary(candles)
-    return out
 
 
 def risk_view(envelope: dict, current: dict, recent_events: list[dict],

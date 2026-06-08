@@ -2,8 +2,8 @@
 
 Pure functions over plain dataclasses: given an `Envelope` (the hard caps), an
 `OrderProposal` and a `RiskContext` (equity + current exposure), decide whether an
-order may pass — and by how much (`max_allowed_qty` for sizing) — and whether
-drawdown has breached. No globals, no store, no exchange: the SAME fuses run in
+order may pass — and whether drawdown has breached. No globals, no store, no
+exchange: the SAME fuses run in
 live (engine.py logs rejections to risk_events) and in backtest (the sim broker
 gates fills through the very same `check_order`), so a backtest can never show a
 fill the live engine would have blocked.
@@ -89,16 +89,6 @@ def check_order(order: OrderProposal, ctx: RiskContext, env: Envelope = DEFAULT_
     if not order.has_stop:
         violations.append("no_stop")
     return Decision(len(violations) == 0, violations)
-
-
-def max_allowed_qty(price: float, ctx: RiskContext, env: Envelope = DEFAULT_ENVELOPE) -> float:
-    """The largest entry qty that clears every cap at `price` — the tightest binds."""
-    if price <= 0:
-        return 0.0
-    size_room = env.max_position_usd / price
-    exposure_room = max(0.0, env.max_total_exposure_usd - ctx.current_exposure_usd) / price
-    lev_room = max(0.0, env.max_leverage * ctx.equity - ctx.current_exposure_usd) / price
-    return max(0.0, min(size_room, exposure_room, lev_room))
 
 
 def size_from_conviction(conviction: float, price: float, env: Envelope = DEFAULT_ENVELOPE,

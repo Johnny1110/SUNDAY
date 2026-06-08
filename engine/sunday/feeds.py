@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import logging
 
-from . import exchange, store
+# exchange (ccxt) / store (redis+psycopg) are imported lazily inside the live-edge
+# functions so the PURE `derive_metrics` stays importable + unit-testable stdlib-only.
 
 log = logging.getLogger("sunday")
 
@@ -43,6 +44,7 @@ def derive_metrics(symbol: str, rate: float | None, mark: float | None,
 
 def fetch_perp_metrics(symbol: str) -> dict:
     """Live: read the exchange and derive one perp_metrics row for `symbol`."""
+    from . import exchange
     fi = exchange.fetch_funding_info(symbol)
     oi = exchange.fetch_open_interest(symbol)
     return derive_metrics(symbol, fi["rate"], fi["mark"], fi["index"], oi)
@@ -51,6 +53,7 @@ def fetch_perp_metrics(symbol: str) -> dict:
 def ingest_all(symbols: list[str]) -> int:
     """Fetch + persist perp_metrics for the whole basket. Never raises (a feed hiccup
     must not kill the watcher); returns how many rows were written."""
+    from . import store
     n = 0
     for sym in symbols:
         try:

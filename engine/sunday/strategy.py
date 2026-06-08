@@ -106,15 +106,5 @@ def evaluate(strategy: str, candles: Candles, fast: int = 20, slow: int = 50) ->
 
 
 def vote_all(candles: Candles) -> list[Vote]:
-    """Every candidate strategy's vote (for the /advisor & /signals panels)."""
+    """Every candidate strategy's vote — the building block of the /advisor panel."""
     return [evaluate(s, candles) for s in CANDIDATES]
-
-
-def target_side(strategy: str, candles: Candles) -> str | None:
-    """The position side the active strategy wants now: 'long' | 'short' | None (flat).
-
-    `None` means hold no position (flat strategy, or a neutral vote). engine.py
-    feeds this into execution.plan_transition to decide hold/open/close/flip.
-    """
-    v = evaluate(strategy, candles)
-    return v.vote if v.vote in ("long", "short") else None

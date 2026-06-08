@@ -54,27 +54,6 @@ class TestCheckOrder(unittest.TestCase):
         self.assertIn("no_stop", d.violations)
 
 
-class TestMaxAllowedQty(unittest.TestCase):
-    def test_tightest_cap_wins(self):
-        # size cap → 2000/1000 = 2.0 ; exposure room 4000 ; lev 3*5000=15000 → size binds
-        q = risk.max_allowed_qty(1000.0, RiskContext(equity=5000, current_exposure_usd=0), ENV)
-        self.assertAlmostEqual(q, 2.0)
-
-    def test_leverage_can_bind(self):
-        # equity 500 → lev room 1500 ; size room 2000 ; exposure 4000 → lev binds → 1.5
-        q = risk.max_allowed_qty(1000.0, RiskContext(equity=500, current_exposure_usd=0), ENV)
-        self.assertAlmostEqual(q, 1.5)
-
-    def test_no_room_returns_zero(self):
-        q = risk.max_allowed_qty(1000.0, RiskContext(equity=5000, current_exposure_usd=4000), ENV)
-        self.assertEqual(q, 0.0)
-
-    def test_a_sized_order_passes_its_own_gate(self):
-        ctx = RiskContext(equity=5000, current_exposure_usd=0)
-        q = risk.max_allowed_qty(1000.0, ctx, ENV)
-        self.assertTrue(risk.check_order(order(q), ctx).allowed)
-
-
 class TestDrawdown(unittest.TestCase):
     def test_no_breach_below_limit(self):
         d = risk.check_drawdown(equity=9600, peak_equity=10000, env=ENV)  # 4% < 5%

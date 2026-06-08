@@ -4,8 +4,9 @@ Pure + unit-testable. Given a tape (+ the perp funding rate), it returns, for on
 symbol:
 
 - the **regime** read (trending / ranging / volatile) from ADX + realized vol,
-- each candidate strategy's **vote** (momentum / mean_reversion) with the indicators
-  behind it, a confidence, and a rationale,
+- each candidate strategy's **vote** (momentum / mean_reversion) — taken straight
+  from `strategy.py`, the SAME pure core the live engine trades on, so the panel
+  can never disagree with what a switch to that strategy would actually do,
 - the **funding context** (a perps-specific edge: who pays whom, annualised),
 - a data-driven **recommendation** (which strategy the regime + signals + funding
   favour, and why).
@@ -18,55 +19,12 @@ single highest-leverage tool to invest in. It never trades; it only informs.
 
 from __future__ import annotations
 
-from . import indicators as ind
 from . import regime as rg
+from . import strategy as strat
 from .market import Candles
-
-# mean_reversion thresholds (shared with strategy.py's selectable strategy)
-MR_Z_BAND = 1.0
-MR_RSI_OS = 35.0
-MR_RSI_OB = 65.0
-MOM_FLAT_SPREAD_PCT = 0.05   # EMA spread tighter than this = no real trend
 
 # Binance USDⓈ-M funding settles every 8h → 3×/day. These gate the funding "bias".
 _FUNDING_HOT = 0.0005    # |rate| ≥ this (0.05%/8h ≈ 55%/yr) is a meaningful tilt
-
-
-def _clamp01(x: float) -> float:
-    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
-
-
-def momentum_vote(closes: list[float], fast: int = 20, slow: int = 50) -> dict:
-    ef, es = ind.ema(closes, fast), ind.ema(closes, slow)
-    if ef is None or es is None:
-        return {"strategy": "momentum", "vote": "neutral", "confidence": 0.0,
-                "indicators": {}, "rationale": f"資料不足（需 ≥{slow} 根）"}
-    spread = (ef - es) / es * 100.0 if es else 0.0
-    inds = {"ema_fast": round(ef, 2), "ema_slow": round(es, 2), "spread_pct": round(spread, 3)}
-    if abs(spread) < MOM_FLAT_SPREAD_PCT:
-        return {"strategy": "momentum", "vote": "neutral", "confidence": 0.0,
-                "indicators": inds, "rationale": f"EMA 糾結（spread {spread:+.2f}%），無趨勢"}
-    side = "long" if spread > 0 else "short"
-    return {"strategy": "momentum", "vote": side, "confidence": round(_clamp01(abs(spread) / 2.0), 3),
-            "indicators": inds,
-            "rationale": f"EMA{fast}{'>' if side == 'long' else '<'}EMA{slow}（spread {spread:+.2f}%）→ 順勢{side}"}
-
-
-def mean_reversion_vote(closes: list[float]) -> dict:
-    bb, rsi = ind.bollinger(closes, 20, 2.0), ind.rsi(closes, 14)
-    if bb is None or rsi is None:
-        return {"strategy": "mean_reversion", "vote": "neutral", "confidence": 0.0,
-                "indicators": {}, "rationale": "資料不足（需 ≥21 根）"}
-    z = bb["z"]
-    inds = {"rsi14": round(rsi, 1), "bb_z": round(z, 2)}
-    if z <= -MR_Z_BAND and rsi <= MR_RSI_OS:
-        return {"strategy": "mean_reversion", "vote": "long", "confidence": round(_clamp01(abs(z) / 2.0), 3),
-                "indicators": inds, "rationale": f"超賣 z={z:.2f}、RSI {rsi:.0f} → 逆勢偏多"}
-    if z >= MR_Z_BAND and rsi >= MR_RSI_OB:
-        return {"strategy": "mean_reversion", "vote": "short", "confidence": round(_clamp01(abs(z) / 2.0), 3),
-                "indicators": inds, "rationale": f"超買 z={z:.2f}、RSI {rsi:.0f} → 逆勢偏空"}
-    return {"strategy": "mean_reversion", "vote": "neutral", "confidence": 0.0,
-            "indicators": inds, "rationale": f"未觸帶邊 z={z:.2f}、RSI {rsi:.0f}（中性）"}
 
 
 def funding_context(funding_rate: float | None) -> dict:
@@ -113,10 +71,13 @@ def recommend(regime_label: str, votes: list[dict], funding: dict) -> dict:
 
 def advise(candles: Candles, funding_rate: float | None, active: str,
            symbol: str = "", fast: int = 20, slow: int = 50) -> dict:
-    """Assemble the full decision-support panel (the /advisor body)."""
-    closes = candles.closes
+    """Assemble the full decision-support panel (the /advisor body).
+
+    Votes come from `strategy.evaluate` — the one pure core the live engine also
+    decides on — so the panel and the actual trade can never drift apart."""
     regime = rg.classify(candles)
-    votes = [momentum_vote(closes, fast, slow), mean_reversion_vote(closes)]
+    votes = [strat.evaluate("momentum", candles, fast, slow).as_dict(),
+             strat.evaluate("mean_reversion", candles).as_dict()]
     funding = funding_context(funding_rate)
     return {
         "symbol": symbol or "",

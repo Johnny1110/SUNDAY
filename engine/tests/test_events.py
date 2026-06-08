@@ -30,7 +30,10 @@ class TestBuildEvent(unittest.TestCase):
     def test_engine_degraded_event(self):
         ev = events.engine_degraded_event("exchange timeout")
         self.assertEqual(ev["data"]["event_type"], "engine_degraded")
-        self.assertIn("restart", ev["data"]["suggested_action"].lower())
+        # honest hint: no HTTP restart endpoint — check /status, tell the User, halt-safe meanwhile
+        sa = ev["data"]["suggested_action"]
+        self.assertIn("/status", sa)
+        self.assertIn("safe", sa)
 
 
 class TestTransport(unittest.TestCase):

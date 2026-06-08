@@ -22,7 +22,7 @@ curl -s "http://127.0.0.1:7777/theses?limit=20"
 # ★ 決策支援面板：每策略此刻的投票 + 指標 + regime + funding（永續資金費）+ 建議策略
 curl -s "http://127.0.0.1:7777/advisor?symbol=BTCUSDT"
 
-# 整體狀態（含當值策略 + 理由 + 倉位 + 曝險）
+# 整體狀態：account-level（mode / equity / 全籃子聚合曝險 / heartbeat）+ 每標的 basket[]（strategy / thesis / position）
 curl -s http://127.0.0.1:7777/status
 
 # 行情 OHLCV
@@ -67,9 +67,11 @@ curl -sX POST http://127.0.0.1:7777/commentary \
 
 ## Dashboard（User 在瀏覽器看；Sunday 自服）
 
-`http://127.0.0.1:7777/dashboard` —— 專業量化終端風格 Web UI（Vue，Sunday 自服）。五區：
-**Overview**（KPI / 權益曲線 + 切換理由疊圖 / 倉位 / advisor）、**Strategy**（advisor 決策面板 + 切策略 lever + 行情圖）、
-**Risk**（封套編輯 + 使用率 + 風控事件）、**Reports**（commentary + 決策/事件時間軸）、**Manual**（本手冊 + API console）。
+`http://127.0.0.1:7777/dashboard` —— 專業量化終端風格 Web UI（Vue，Sunday 自服）。七頁：
+**Overview**（KPI / 權益曲線 + 切換理由疊圖 / 籃子倉位 / advisor）、**Desk**（全籃子 notable 排序 + 單標的微結構深掘）、
+**Strategy**（advisor 決策面板 + 切策略 / 下 thesis lever + 行情圖）、**Risk**（封套編輯 + 使用率 + 風控事件）、
+**Ablation**（資訊層 vs no-trade 基準 + info-ON/OFF 拆分——edge 的生死線，不變量 11）、**Reports**（commentary + 決策/事件時間軸）、
+**Manual**（本手冊 + API console）。
 User 由此能行使與 agent 等價的全部操作（lever 經同一組端點，確定性風控仍是最終防線）。
 
 ## Lever（POST；需 permission 審批；僅 leader）

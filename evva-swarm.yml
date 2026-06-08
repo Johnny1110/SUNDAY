@@ -1,30 +1,35 @@
 name: sunday              # → webhook endpoint POST /api/swarm/sunday/event
 workdir: .
 
-# milestone-4 research desk: friday(desk lead) + analyst-flow/analyst-news (parallel
-# specialist coverage) + risk-monitor (adversarial) + reviewer (post-mortem/playbook).
-# friday alone pulls levers (thesis/strategy/halt); the rest advise via send_message.
+# milestone-4 research desk, milestone-5 tuned: friday(desk lead = COORDINATOR) +
+# analyst-flow/analyst-news (parallel specialist coverage) + risk-monitor (adversarial)
+# + reviewer (post-mortem/playbook). friday alone pulls levers (thesis/strategy/halt).
+#
+# Wake discipline (invariant 6): event-gated is PRIMARY; timers are a SAFETY NET, NOT
+# market polling. friday's 30m timer is the load-bearing dead-man heartbeat (Sunday
+# safe-modes after 90m without one → 3× margin). The others are deliberately low-freq —
+# the real triggers are Sunday's notable-score / event webhooks, not these ticks.
 
 leader:
   agent: friday
   schedule:
     every: 30m
-    prompt: "Dead-man check：POST /heartbeat + 查 /status·/desk。Sunday 活著嗎？封套內嗎？籃子有沒有 notable 標的值得開一輪研究？無事就回報並 stand down。"
+    prompt: "安全網巡檢（非輪詢）：POST /heartbeat 維持 dead-man liveness，順手 GET /status·/desk 看 Sunday 活著嗎、封套內嗎、籃子有無 notable 標的值得開一輪研究。有事才協調（派 analyst→綜合→踢館→拍板→回信）；無事就一句回報並 stand down。"
 
 workers:
-  - agent: analyst-flow          # event-driven only (woken by funding_extreme / oi_surge / basis_stretch)
+  - agent: analyst-flow          # event-driven only：由 funding_extreme / oi_surge / basis_stretch / liq_cluster webhook 喚醒（不排程，避免輪詢）
   - agent: analyst-news
     schedule:
-      every: 30m
-      prompt: "掃 /desk 看籃子有無 notable 標的或迫近事件；有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。沒事 stand down。"
+      every: 6h
+      prompt: "低頻安全網巡檢（非輪詢；重大事件由 catalyst webhook 即時喚醒你）：GET /desk 掃籃子有無迫近事件（解鎖/macro/上架/治理），有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。沒事就一句 stand down。"
   - agent: risk-monitor
     schedule:
-      every: 30m
-      prompt: "風控 audit：查 /risk 對照封套，違規或逼近上限即 send_message 警告 friday（必要時建議 halt）。沒事 stand down。"
+      every: 1h
+      prompt: "風控安全網巡檢（確定性熔斷已在 Sunday 毫秒級自動擋，你做策略級）：GET /risk·/status 對照封套與聚合曝險，違規或逼近上限即 send_message 警告 friday（必要時建議 halt，獲授 RP-11 窄 lever 時可自行 POST /halt safe）。沒事就一句 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 17 * * *"
-      prompt: "當日復盤：查 /theses·/performance·/pnl·/ablation，歸因 thesis 結果 + 寫 playbook commentary（author:reviewer）+ 交 friday 1-2 條改進建議。"
+      prompt: "當日復盤：GET /theses·/performance·/pnl·/ablation，歸因 thesis 結果（哪類 work/不 work、friday 採納判斷對不對）+ 寫 playbook commentary（author:reviewer）+ 交 friday 1-2 條具體改進建議。"
 
 settings:
   # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.

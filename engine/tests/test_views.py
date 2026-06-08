@@ -1,41 +1,12 @@
-"""Unit tests for the milestone-3 HTTP logic (panel + defensive lever)."""
+"""Unit tests for the pure HTTP logic: /risk panel + defensive /strategy & /thesis levers."""
 
 import unittest
 from datetime import datetime, timezone
 
 from sunday import views
-from sunday.market import Candles
-
-
-def candles(closes):
-    n = len(closes)
-    return Candles([i for i in range(n)], [closes[0]] + closes[:-1],
-                   [c + 0.5 for c in closes], [c - 0.5 for c in closes],
-                   list(map(float, closes)), [1.0] * n)
 
 
 FIXED = datetime(2026, 6, 8, 11, 0, tzinfo=timezone.utc)
-
-
-class TestPanels(unittest.TestCase):
-    def test_signals_view_shape(self):
-        v = views.signals_view("BTCUSDT", candles([float(i) for i in range(1, 80)]), "momentum", as_of=FIXED)
-        self.assertEqual(v["symbol"], "BTCUSDT")
-        self.assertEqual(v["active"], "momentum")
-        self.assertEqual(v["as_of_ts"], FIXED.isoformat())
-        self.assertIn("label", v["regime"])
-        self.assertEqual([x["strategy"] for x in v["votes"]], ["momentum", "mean_reversion"])
-
-    def test_status_view_adds_legibility_fields(self):
-        state = {"alive": True, "strategy": "momentum", "last_lever": {"by": "friday", "what": "strategy"}}
-        out = views.status_view(state, candles([float(i) for i in range(1, 80)]), as_of=FIXED)
-        self.assertEqual(out["as_of_ts"], FIXED.isoformat())
-        self.assertEqual(out["last_lever"]["by"], "friday")
-        self.assertEqual(len(out["votes"]), 2)        # votes summary present
-
-    def test_status_view_without_candles_has_no_votes(self):
-        out = views.status_view({"alive": True}, as_of=FIXED)
-        self.assertNotIn("votes", out)
 
 
 ENV = {"max_position_usd": 2000.0, "max_total_exposure_usd": 4000.0,

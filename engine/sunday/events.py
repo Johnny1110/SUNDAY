@@ -56,10 +56,12 @@ def regime_shift_event(prev_label: str | None, regime, status: Any = None) -> di
 
 
 def engine_degraded_event(detail: str, status: Any = None) -> dict:
-    """`engine_degraded`: the engine can't trade — tell the leader to look/restart."""
+    """`engine_degraded`: the engine can't trade — tell the leader to look (no HTTP restart)."""
     return build_event(
         "engine_degraded", "engine degraded", detail, status=status,
-        rationale=detail, suggested_action="引擎異常 → 查 /status，必要時 POST /restart 重啟",
+        rationale=detail,
+        suggested_action="引擎異常 → 查 /status 對帳；Sunday 無 HTTP 重啟端點，請通報 User 重啟服務，"
+                         "其間可 POST /halt {mode:'safe'} 凍新倉保護現有部位",
     )
 
 

@@ -57,10 +57,10 @@ sunday/
 
 ## 現況 / 節奏
 
-- **已完成**：milestone-1（引擎 + 最小監督迴路 + 確定性風控 + 雙向 dead-man）、milestone-2（Sunday 自服 dashboard；後擴為 Vue 多頁 User UI，串全部 API + lever + 報告頁）、milestone-3（agent legibility：`/advisor` 決策面板 + 閉迴路歸因 + 防禦式 skill）。117 單元測試綠。
-- **現況 = milestone-4（研究台轉向）**：把系統從「監督笨策略」轉為「AI 事件驅動永續台」。讀 [docs/prd/milestone-4/](docs/prd/milestone-4/)；任務分解見 `milestone-4/milestone-4.0/README.md`。
-- **里程碑**：M1 → M2 → M3 →（轉向）**M4** → **M4.1 一個月 testnet running test**（= 下一個 gate）→ Gate-2（真錢，gated on ablation 結果）。
-- **待決**：milestone-4 product-plan §10（籃子標的、conviction→size 映射、roster 大小、notable score 公式、A/B 切分、批2 feed 來源、test 封套數字）。
+- **已完成**：milestone-1（引擎 + 最小監督迴路 + 確定性風控 + 雙向 dead-man）、milestone-2（Sunday 自服 dashboard；後擴為 Vue 多頁 User UI）、milestone-3（agent legibility：`/advisor` 決策面板 + 閉迴路歸因 + 防禦式 skill）、milestone-4（研究台轉向：資訊層 `/desk`、thesis 驅動 `directed`、ablation 生死線、5-agent roster）。evva 側 RP-11（per-member 窄 lever）、RP-12（advice-loop 閉合）已 ship。
+- **現況 = milestone-5（盤點/整鏈/固本）**：不開發新功能，把 m1→m4 的鏈路盤點乾淨、重構去重、修斷鏈，並優化 agent 協同認知（friday = 協調者）+ crontab（對齊不變量 6：timer 只當安全網）。讀 [docs/prd/milestone-5/](docs/prd/milestone-5/)。**128 單元測試綠。**
+- **里程碑**：M1 → M2 → M3 →（轉向）M4 → **M5（固本，現行）** → **M4.1 一個月 testnet running test**（= 下一個 gate）→ Gate-2（真錢，gated on ablation 結果）。
+- **待決**：product-plan §10 的數字（conviction→size 曲線、notable score 權重、test 封套）已先給 milestone-4 預設值，留待 running-test 期間按實況調；批 2 feed 來源未定。
 
 ## 慣例
 
