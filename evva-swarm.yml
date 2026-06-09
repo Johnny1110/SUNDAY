@@ -13,19 +13,21 @@ workdir: .
 leader:
   agent: friday
   schedule:
-    every: 10m
+    cron: "0 17 * * *"
     prompt: "安全網巡檢（非輪詢）：POST /heartbeat 維持 dead-man liveness，順手 GET /status·/desk 看 Sunday 活著嗎、封套內嗎、籃子有無 notable 標的值得開一輪研究。有事才協調（派 analyst→綜合→踢館→拍板→回信）；無事就一句回報並 stand down。"
 
 workers:
   - agent: analyst-flow          # event-driven only：由 funding_extreme / oi_surge / basis_stretch / liq_cluster webhook 喚醒（不排程，避免輪詢）
+    cron: "0 17 * * *"
+    rompt: "檢查自己的 task 任務，根據任務指示中的市場標地 (leader 開倉或關注的市場) 利用 sunday API 查詢並分分析動能信號，整理成報告並 send_message 給 friday．"
   - agent: analyst-news
     schedule:
-      every: 1h
-      prompt: "低頻安全網巡檢（非輪詢；重大事件由 catalyst webhook 即時喚醒你）：GET /desk 掃籃子有無迫近事件（解鎖/macro/上架/治理），有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。沒事就一句 stand down。"
+      cron: "0 17 * * *"
+      prompt: "檢查自己的 task 任務，根據任務指示中的市場標地為中心 (leader 開倉或關注的市場) 收集新聞時事資訊並整理匯報：GET /desk 掃籃子有無迫近事件（解鎖/macro/上架/治理），有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。除了 leader 指定的標的要關注以外，有任何世界金融，戰爭，政治或區塊鏈大事件發生也要及時彙報．沒事就一句 stand down。"
   - agent: risk-monitor
     schedule:
-      every: 1h
-      prompt: "風控安全網巡檢（確定性熔斷已在 Sunday 毫秒級自動擋，你做策略級）：GET /risk·/status 對照封套與聚合曝險，違規或逼近上限即 send_message 警告 friday（必要時建議 halt，獲授 RP-11 窄 lever 時可自行 POST /halt safe）。沒事就一句 stand down。"
+      cron: "0 17 * * *"
+      prompt: "風控安全網巡檢: 例行巡查 friday(leader) 的行爲是否異常 GET /risk·/status 對照封套與聚合曝險，違規或逼近上限即 send_message 警告 friday（必要時建議 halt)。沒事就一句 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 17 * * *"
