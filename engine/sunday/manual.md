@@ -145,6 +145,20 @@ curl -s  "http://127.0.0.1:7777/api/reports/12"                  # 單則全文
 `kind`：`profit` | `loss` | `system` | `info`（其他值存為 info，用於 UI 上色）。`title` 必填。
 這和 `/api/journal`（reviewer 每日排程復盤）不同——通報是**事件驅動**「你現在該知道」的快訊。
 
+## 系統時間 `/api/system/time`
+
+時間/時區的對時錨點（緣起 PRD-001：只看無時區的牆鐘字串，會把本地時間誤讀成 UTC）。
+
+```bash
+curl -s http://127.0.0.1:7777/api/system/time
+# {"epoch_ms":1781123100000,"utc":"2026-06-10T04:25:00+00:00","local":"2026-06-10T12:25:00+08:00",
+#  "tz":"HKT","utc_offset":"+08:00","binance_clock":{"offset_ms":-3,"synced":true}}
+```
+
+慣例：跨系統對時一律用 `epoch_ms`（無時區的絕對時間）；任何**沒帶 offset 的牆鐘字串都是本地時間**
+（offset 見 `utc_offset`），需要 UTC 自行換算。`binance_clock` 是 Sunday 簽單用的 Binance↔本地偏移
+（ms；`synced=false` 表示尚未對時過，offset 視為 0）。
+
 ## Webhook（Sunday → evva swarm）
 
 `position_pnl`（倉位每 5% ROI）與 `price_alert`（提醒觸發）兩種事件，POST 到 `EVVA_WEBHOOK_URL`

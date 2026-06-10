@@ -258,6 +258,12 @@ def _server_ms() -> int:
     return int(time.time() * 1000.0 + _clock["offset"]) - _TS_SAFETY_MS
 
 
+def clock_info() -> dict:
+    """Binance↔local clock state for /api/system/time: last measured offset (ms,
+    0 until the first sync) and whether a sync has succeeded yet."""
+    return {"offset_ms": round(_clock["offset"]), "synced": _clock["synced"]}
+
+
 def _signed_request(path: str, params: dict | None = None):
     """One signed GET to the testnet fapi. Raises with Binance's {code,msg} on failure."""
     p = {k: v for k, v in (params or {}).items() if v is not None}

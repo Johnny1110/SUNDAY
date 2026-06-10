@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from . import runtime, store
 from .config import settings
 from .routers import (account, admin, alerts, funding, indices, journal, klines, markets,
-                      memory, monitor, perp, reports)
+                      memory, monitor, perp, reports, system)
 
 log = logging.getLogger("sunday")
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -66,7 +66,7 @@ app = FastAPI(title="Sunday", version="0.6.0", lifespan=lifespan)
 
 for _r in (markets.router, klines.router, funding.router, perp.router,
            account.router, indices.router, alerts.router, monitor.router, journal.router,
-           memory.router, reports.router, admin.router):
+           memory.router, reports.router, system.router, admin.router):
     app.include_router(_r)
 
 # Serve the built dashboard's assets (Vite outputs to web/dist with base=/ui/).
