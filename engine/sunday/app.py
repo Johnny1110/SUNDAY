@@ -47,11 +47,26 @@ def _restore_monitor_config() -> None:
             pass
 
 
+async def _check_webhook_reachable() -> None:
+    """Boot-time probe of the evva swarm webhook. Sunday is event-driven — if this URL is
+    wrong or the swarm is down, agents silently never wake — so say it loudly at startup."""
+    import asyncio
+
+    from . import events
+    url = settings.evva_webhook_url
+    if await asyncio.to_thread(events.probe, url):
+        log.info("evva webhook reachable: %s", url)
+    else:
+        log.warning("evva webhook UNREACHABLE: %s — position_pnl / price_alert events "
+                    "will be dropped (and logged) until the swarm is up", url)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.connect(settings.sqlite_path)
     _restore_monitor_config()
     log.info("sqlite ready at %s", settings.sqlite_path)
+    await _check_webhook_reachable()
     from .pricehub import Realtime  # lazy: keeps app import light + test-friendly
     runtime.realtime = Realtime()
     await runtime.realtime.start()

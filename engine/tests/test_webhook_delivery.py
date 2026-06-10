@@ -41,6 +41,10 @@ class _Receiver:
                 self.send_response(st)
                 self.end_headers()
 
+            def do_GET(self):  # evva-style health endpoint, for events.probe
+                self.send_response(st if self.path == "/healthz" else 404)
+                self.end_headers()
+
             def log_message(self, *a):  # keep test output quiet
                 pass
 
@@ -118,9 +122,43 @@ class TestPostContract(unittest.TestCase):
 
 class TestPostResilience(unittest.TestCase):
     def test_never_raises_when_swarm_down(self):
-        # Closed port → urlopen fails; post must swallow it so Sunday keeps serving.
-        status, ok = events.post("http://127.0.0.1:1/api/swarm/sunday/event", {"body": "x"}, timeout=0.5)
+        # Closed port → urlopen fails; post must swallow it so Sunday keeps serving,
+        # and log a warning so the drop is observable (a lost event = an agent never woken).
+        with self.assertLogs("sunday.events", level="WARNING") as cm:
+            status, ok = events.post("http://127.0.0.1:1/api/swarm/sunday/event",
+                                     {"title": "t", "body": "x"}, timeout=0.5)
         self.assertEqual((status, ok), (None, False))
+        self.assertIn("failed", cm.output[0])
+
+    def test_empty_url_dropped_with_warning(self):
+        # Misconfigured EVVA_WEBHOOK_URL must not look like a network blip.
+        with self.assertLogs("sunday.events", level="WARNING") as cm:
+            status, ok = events.post("", {"title": "t", "body": "x"})
+        self.assertEqual((status, ok), (None, False))
+        self.assertIn("EVVA_WEBHOOK_URL empty", cm.output[0])
+
+    def test_non_2xx_logged(self):
+        rx = _Receiver(status=500)
+        self.addCleanup(rx.stop)
+        with self.assertLogs("sunday.events", level="WARNING") as cm:
+            status, ok = events.post(rx.url, {"title": "t", "body": "x"})
+        self.assertEqual((status, ok), (500, False))
+        self.assertIn("rejected", cm.output[0])
+
+
+class TestProbe(unittest.TestCase):
+    """Boot-time reachability check used by the app lifespan."""
+
+    def test_probe_ok_via_healthz(self):
+        rx = _Receiver(status=200)
+        self.addCleanup(rx.stop)
+        self.assertTrue(events.probe(rx.url))
+
+    def test_probe_down(self):
+        self.assertFalse(events.probe("http://127.0.0.1:1/api/swarm/sunday/event", timeout=0.5))
+
+    def test_probe_empty_url(self):
+        self.assertFalse(events.probe(""))
 
 
 class TestEngineProductionPath(unittest.TestCase):

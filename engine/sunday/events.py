@@ -11,8 +11,13 @@ action so a woken agent can act on its first turn without a round-trip.
 from __future__ import annotations
 
 import json
+import logging
+import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
+
+log = logging.getLogger("sunday.events")
 
 
 def build_event(title: str, body: str, data: dict | None = None, to: str = "leader") -> dict:
@@ -60,10 +65,36 @@ def _build_request(url: str, payload: dict) -> urllib.request.Request:
 
 
 def post(url: str, payload: dict, timeout: float = 3.0) -> tuple[int | None, bool]:
-    """Fire-and-forget POST. Returns (http_status, ok); never raises."""
+    """Fire-and-forget POST. Returns (http_status, ok); never raises.
+
+    A dropped event means a sleeping agent that never wakes, so every failure path
+    logs a warning here (the single choke point) instead of relying on callers."""
+    title = payload.get("title", "?")
+    if not url or not url.strip():
+        log.warning("webhook dropped (EVVA_WEBHOOK_URL empty): %s", title)
+        return None, False
     try:
         with urllib.request.urlopen(_build_request(url, payload), timeout=timeout) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
-            return status, 200 <= status < 300
+            return status, True
+    except urllib.error.HTTPError as e:  # swarm answered but refused the event
+        log.warning("webhook POST %s rejected (HTTP %s): %s", url, e.code, title)
+        return e.code, False
+    except Exception as e:  # swarm unreachable — log and carry on, Sunday must keep serving
+        log.warning("webhook POST %s failed (%s): %s", url, e, title)
+        return None, False
+
+
+def probe(url: str, timeout: float = 3.0) -> bool:
+    """Boot-time reachability check: GET the swarm origin's /healthz (the evva health
+    endpoint, same as scripts/smoke-webhook.sh). Never raises — returns ok."""
+    if not url or not url.strip():
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        health = f"{parts.scheme}://{parts.netloc}/healthz"
+        with urllib.request.urlopen(health, timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            return 200 <= status < 300
     except Exception:
-        return None, False  # swarm unreachable — caller logs it and carries on
+        return False
