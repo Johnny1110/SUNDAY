@@ -4,6 +4,8 @@ No network: we test the formatters directly and assert `send` is a silent no-op 
 bot token / chat id aren't configured (the default), so an unconfigured deploy is unchanged.
 """
 
+import sys
+import types
 import unittest
 
 from sunday import telegram as T
@@ -59,11 +61,22 @@ class TestTelegramFormatters(unittest.TestCase):
         self.assertIn("持倉", msg)
 
     def test_send_is_noop_when_unconfigured(self):
-        # Default settings have blank token/chat → send must not raise and must report no-op.
-        self.assertFalse(T.enabled())
-        status, ok = T.send("hello")
-        self.assertIsNone(status)
-        self.assertFalse(ok)
+        # Blank token/chat → send must not raise and must report no-op. Stub sunday.config
+        # so the test doesn't depend on the developer's real engine/.env having TELEGRAM_*.
+        stub = types.ModuleType("sunday.config")
+        stub.settings = types.SimpleNamespace(telegram_bot_token="", telegram_chat_id="")
+        prev = sys.modules.get("sunday.config")
+        sys.modules["sunday.config"] = stub
+        try:
+            self.assertFalse(T.enabled())
+            status, ok = T.send("hello")
+            self.assertIsNone(status)
+            self.assertFalse(ok)
+        finally:
+            if prev is not None:
+                sys.modules["sunday.config"] = prev
+            else:
+                sys.modules.pop("sunday.config", None)
 
 
 if __name__ == "__main__":
