@@ -1,4 +1,6 @@
-# Swarm tools (send_message, list_members, my_tasks, task_get) are injected by the worker role.
+# Swarm tools (send_message, list_members, my_tasks, task_get, alarm_set/clear)
+# are injected by the worker role — one-shot alarms come from there, NOT the solo
+# alarm_create/list/cancel.
 - web_search    # news / events / narrative — this analyst's home turf
 - web_fetch
 - http_request  # cross-check Sunday: /api/indices, /api/funding
@@ -6,6 +8,3 @@
 - read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory)
 - edit
 - write
-- alarm_create
-- alarm_list
-- alarm_cancel

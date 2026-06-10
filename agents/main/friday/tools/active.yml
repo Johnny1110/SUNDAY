@@ -1,6 +1,8 @@
 # Regular evva tools only. Swarm tools (task_create/assign/verify, task_list,
-# send_message, list_members, schedule_set/clear) are injected automatically by
-# the leader role — do NOT list them here.
+# send_message, list_members, schedule_set/clear, alarm_set/clear) are injected
+# automatically by the leader role — do NOT list them here. In particular do NOT
+# list the solo alarm_create/list/cancel: swarm members use alarm_set/alarm_clear
+# (durable bus delivery, shows in list_members ⏰, leader can target teammates).
 - http_request  # operate Sunday over its HTTP API (/api/markets, /klines, /perp, /account, /indices, /alerts…)
 - web_search
 - web_fetch     # pull external context when judging the market
@@ -9,6 +11,5 @@
 - edit
 - write         # file docs/PRD/PRD-*.md (long-term memory now via http_request → /api/memory/friday)
 - bash
-- alarm_create
-- alarm_list
-- alarm_cancel
+- todo_write    # plan multi-step ops (reconcile → cancel → re-order → verify) instead of head-tracking
+- calc          # position sizing / exposure arithmetic without LLM mental math

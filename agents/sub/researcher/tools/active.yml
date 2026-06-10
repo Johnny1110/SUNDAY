@@ -1,4 +1,6 @@
-# Swarm tools (send_message, list_members, my_tasks, task_get) are injected by the worker role.
+# Swarm tools（send_message, list_members, my_tasks, task_get, alarm_set/clear）
+# 由 worker 角色自動注入——一次性鬧鐘用注入的 alarm_set/clear，不是 solo 版
+# alarm_create/list/cancel。
 - web_search    # 任意探索：美股新聞 / 區塊鏈大小事 / 鏈上新協議 / 美國政府動態 — 這是研究員的主場
 - web_fetch
 - http_request  # 對照 Sunday：/api/indices、/api/markets（看某敘事有沒有可下單標的）
@@ -6,6 +8,3 @@
 - read          # 讀 docs/PRD 票（長期研究記憶改走 http_request → /api/memory/researcher）
 - edit
 - write         # 開 docs/PRD/PRD-*.md（長期研究記憶改走 http_request → /api/memory/researcher）
-- alarm_create
-- alarm_list
-- alarm_cancel

@@ -1,8 +1,6 @@
 # Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
-# task_get) are injected automatically by the worker role — do NOT list them here.
+# task_get, alarm_set/clear) are injected automatically by the worker role — do
+# NOT list them here, and do NOT list the solo alarm_create/list/cancel.
 - http_request  # read /api/account/* (trades/orders/pnl) + POST the daily report to /api/journal
 - skill
 - read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory/reviewer)
-- alarm_create
-- alarm_list
-- alarm_cancel
