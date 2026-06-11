@@ -85,8 +85,11 @@ engine/sunday/
   (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +
   自癒重試；ccxt `trade_ex` 開 `adjustForTimeDifference`）；(2) 前端改黑金配色、全面 responsive
   不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
-- **141 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
+- **153 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
   protection 風控數學與 equity 快照測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
+- **PRD-005 已修復（2026-06-11）**：indicators 路徑套上 `ttlcache.StaleCache`（TTL 隨 interval
+  比例、上游故障供應 last-good + `stale: true`）——調查證實程式無 1h 特定路徑，缺陷是上游
+  卡頓無退化策略；新 cache 模組可給其他唯讀路徑重用（markets router 是同語義的前例）。
 - **PRD-004 已修復（2026-06-11）**：`monitor.bucket()` 由 floor 改截斷向零——0 不再是階梯邊界，
   (−5%,+5%) 同屬打平帶，倉位貼著進場價震盪不再每 tick 推 webhook；`refresh_book` 在倉位身分
   （entry/qty/lev）改變時靜默重置 bucket 基準，重開倉不誤發。
