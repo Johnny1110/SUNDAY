@@ -71,3 +71,21 @@ POST /api/perp/protection
 ---
 
 — friday, 2026-06-12 01:36 CST
+
+## ✅ 已修復（2026-06-12，與 BUG-04 同一 root cause）
+
+**根因**：不是「取消舊腿誤走 market sell」——是**新 SL 腿一掛上去就立即觸發**。`place_stop()`
+未指定 `workingType`，幣安預設 `CONTRACT_PRICE` = 用**測試網最新成交價**判定觸發；測試網成交價
+（薄訂單簿）與 agent 決策依據的主網價格脫鉤。本案例：主網 mark ~63,400，但測試網成交價 ~62,430
+< 觸發價 62,615 → 新腿落地即在觸發區。且 Algo Service 遷移後幣安**不再回 -2021 拒單**，而是直接
+成交 → reduce-only market sell 全平（即觀察到的 order #14843715560）。
+
+**修復**（`fix/bug-report-sl-trigger` branch）：
+1. `exchange.place_stop()` 改掛 `workingType=MARK_PRICE`——測試網 mark 由指數推導、貼近主網真實價，
+   觸發行為回到 agent 預期。
+2. `/api/perp/order` 與 `/api/perp/protection` 在**任何寫入前**先以測試網 mark 驗證觸發價：已在
+   觸發區回 400 並說明方向（`protection.immediate_trigger`，純邏輯、有單元測試），補回 Algo Service
+   不再提供的 -2021 防線。protection 的兩個觸發價一起預檢——不會 TP 先掛上、SL 才報錯的半套狀態。
+
+迴歸測試：`tests/test_tpsl_safety.py`、`tests/test_protection.py::TestImmediateTrigger`。
+audit log 見 BUG-03 修復；平倉孤兒腿清理見 BUG-02 修復。

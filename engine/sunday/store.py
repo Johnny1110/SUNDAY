@@ -47,8 +47,10 @@ CREATE TABLE IF NOT EXISTS kv (
     v TEXT
 );
 
--- Order journal (req): the agent's rationale ("memo") + the exact params for every
--- order it places, so the position query can join it back and show the User WHY.
+-- Order journal (req) + audit log (BUG-03): the agent's rationale ("memo"), the exact
+-- params, WHO did it (agent = self-reported X-Agent header) and WHAT kind of write it
+-- was (action: order | protection | close | cancel) for every order-book mutation, so
+-- the position query can join the WHY back and anomalous orders are attributable.
 CREATE TABLE IF NOT EXISTS order_log (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     ts           TEXT NOT NULL,
@@ -64,7 +66,9 @@ CREATE TABLE IF NOT EXISTS order_log (
     reduce_only  INTEGER,        -- 0 / 1
     take_profit  REAL,
     stop_loss    REAL,
-    memo         VARCHAR(300)    -- length enforced at the API layer (sqlite ignores it)
+    memo         VARCHAR(300),   -- length enforced at the API layer (sqlite ignores it)
+    agent        TEXT,           -- X-Agent header at write time; null = caller didn't say
+    action       TEXT NOT NULL DEFAULT 'order'  -- order | protection | close | cancel
 );
 CREATE INDEX IF NOT EXISTS idx_order_log_symbol ON order_log (symbol, id DESC);
 
@@ -117,6 +121,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive upgrades for DBs created before a column existed (CREATE TABLE IF NOT
+    EXISTS never alters). order_log: + agent / action (BUG-03 audit log) — pre-existing
+    rows take action 'order', which is what they all were."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(order_log)")}
+    if "agent" not in cols:
+        conn.execute("ALTER TABLE order_log ADD COLUMN agent TEXT")
+    if "action" not in cols:
+        conn.execute("ALTER TABLE order_log ADD COLUMN action TEXT NOT NULL DEFAULT 'order'")
+
+
 def connect(path: str) -> None:
     global _conn
     with _LOCK:
@@ -125,6 +140,7 @@ def connect(path: str) -> None:
         _conn.execute("PRAGMA journal_mode=WAL")    # readers don't block the single writer
         _conn.execute("PRAGMA busy_timeout=5000")   # wait up to 5s on contention, don't error
         _conn.executescript(_SCHEMA)
+        _migrate(_conn)
         _conn.commit()
 
 
@@ -233,33 +249,52 @@ def kv_set(k: str, v: str) -> None:
 # Order journal — agent rationale + params per order (req)
 # --------------------------------------------------------------------------
 
-def record_order(symbol: str, order_id: str | None, memo: str | None, order: dict) -> None:
-    """Log an order's params (one column each) + the agent's memo (req)."""
+def record_order(symbol: str, order_id: str | None, memo: str | None, order: dict,
+                 agent: str | None = None, action: str = "order") -> None:
+    """Log one order-book mutation: params (one column each) + the agent's memo (req)
+    + the operator and action kind (BUG-03 audit log)."""
     with _LOCK:
         _db().execute(
             "INSERT INTO order_log (ts, symbol, order_id, side, type, qty, notional_usd, price, "
-            "leverage, margin_mode, reduce_only, take_profit, stop_loss, memo) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "leverage, margin_mode, reduce_only, take_profit, stop_loss, memo, agent, action) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (_now(), symbol, str(order_id) if order_id is not None else None,
              order.get("side"), order.get("type"), order.get("qty"), order.get("notional_usd"),
              order.get("price"), order.get("leverage"), order.get("margin_mode"),
              1 if order.get("reduce_only") else 0, order.get("take_profit"), order.get("stop_loss"),
-             memo),
+             memo, agent, action),
         )
         _db().commit()
 
 
 def latest_order(symbol: str) -> dict | None:
-    """The most recent logged order for a symbol (memo + params) — what the position
-    query joins to surface the agent's rationale to the User."""
+    """The most recent logged ENTRY order for a symbol (memo + params) — what the
+    position query joins to surface the agent's rationale to the User. Audit rows
+    (protection / close / cancel) never displace the entry's memo."""
     with _LOCK:
         row = _db().execute(
-            "SELECT * FROM order_log WHERE symbol = ? ORDER BY id DESC LIMIT 1", (symbol,)).fetchone()
+            "SELECT * FROM order_log WHERE symbol = ? AND action = 'order' "
+            "ORDER BY id DESC LIMIT 1", (symbol,)).fetchone()
     if not row:
         return None
     d = dict(row)
     d["reduce_only"] = bool(d.get("reduce_only"))
     return d
+
+
+def agents_by_order_id(symbol: str | None = None) -> dict[str, str]:
+    """order_id → agent for every CREATING audit row that named its operator — the
+    join the /api/account listings use (BUG-03). Cancel rows reference someone ELSE's
+    order id and must not re-attribute it."""
+    q = ("SELECT order_id, agent FROM order_log WHERE agent IS NOT NULL "
+         "AND order_id IS NOT NULL AND action != 'cancel'")
+    args: tuple = ()
+    if symbol:
+        q += " AND symbol = ?"
+        args = (symbol,)
+    with _LOCK:
+        rows = _db().execute(q + " ORDER BY id", args).fetchall()
+        return {str(r["order_id"]): r["agent"] for r in rows}
 
 
 # --------------------------------------------------------------------------

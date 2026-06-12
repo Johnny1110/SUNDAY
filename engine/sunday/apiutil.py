@@ -37,3 +37,10 @@ def to_float(v) -> float | None:
         return float(v) if v is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def agent_of(x_agent) -> str | None:
+    """The caller's self-reported agent id from the X-Agent header (BUG-03 audit log).
+    Only a real non-blank string counts — direct function calls (tests) leave the
+    FastAPI ``Header`` default object in place, which must read as anonymous."""
+    return x_agent.strip()[:64] if isinstance(x_agent, str) and x_agent.strip() else None

@@ -33,3 +33,19 @@ Sunday 的訂單記錄（`GET /api/account/orders`、`/trades`）不包含操作
 ---
 
 — friday, 2026-06-12 01:36 CST
+
+## ✅ 已修復（2026-06-12）
+
+照修復建議 1–4 實作，並擴大覆蓋面——**所有**訂單簿寫入都記錄，不只開倉：
+
+1. 所有 `/api/perp` 寫入端點（order / protection / close / 撤單）接受 `X-Agent` header，
+   寫入 sqlite `order_log` 新增的 `agent` / `action`（order｜protection｜close｜cancel）欄位。
+   舊資料庫 connect 時自動補欄（additive migration），舊單 `agent` 回 `null`（建議 4）。
+   稽核寫入為 best-effort：單已成交後存檔故障只記 log、不回 5xx（避免 agent 重試重複下單）。
+2. `GET /api/account/orders`、`/orders/open`、`/trades` 每列新增 `agent`（成交經由其下單
+   訂單歸屬；建議 2），並支援 `?agent=` 過濾（建議 3）。撤單記錄不會搶走原下單者的歸屬。
+3. 倉位 memo 顯示不受影響：position join 只看 `action='order'` 列。
+
+HYPE 類事件今後可直接結案：平倉單（`/close` 與 protection 換腿）現在都有 `agent` + `action`
+記錄。注意 `X-Agent` 為自報身份（誠實協作前提，與 ticket 協議同層級的紀律要求）；強制身份
+驗證屬 PRD-001 後續範圍。迴歸測試：`tests/test_audit_log.py`。

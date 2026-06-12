@@ -29,6 +29,19 @@ def _default_position_notify(event: dict) -> None:
     telegram.send(telegram.position_text(event))
 
 
+def _default_orphan_sweep(symbol: str, asof_ms: int) -> None:
+    """Production sweep: a position vanished from the book, so its resting TP/SL legs
+    are orphans — cancel them (BUG-02: TP fires → SL stays armed forever, polluting the
+    open-orders view). Only legs created before ``asof_ms`` (the moment the close was
+    observed) are touched: a close+reopen inside one poll window keeps its fresh legs."""
+    from . import exchange
+    cancelled, failed = exchange.sweep_orphan_legs(symbol, before_ms=asof_ms)
+    if cancelled:
+        log.info("orphan TP/SL sweep %s: cancelled %s", symbol, ",".join(cancelled))
+    if failed:
+        log.warning("orphan TP/SL sweep %s: could not cancel %s", symbol, ",".join(failed))
+
+
 def _f(v) -> float | None:
     try:
         return float(v) if v is not None else None
@@ -77,13 +90,15 @@ class Monitor:
     thread and the ws loop both touch the book; reentrant so refresh→evaluate nests)."""
 
     def __init__(self, notify: Callable[[dict], None] | None = None,
-                 step_pct: float | None = None, to: str | None = None) -> None:
+                 step_pct: float | None = None, to: str | None = None,
+                 sweep: Callable[[str, int], None] | None = None) -> None:
         self.book: dict[str, dict] = {}      # symbol id (BTCUSDT) -> {side, entry, qty, margin, mark}
         self.buckets: dict[str, int] = {}    # symbol id -> last-notified step bucket
         self._lock = threading.RLock()
         self._notify = notify or _default_position_notify
         self._step_pct = step_pct            # None → read live settings (tests inject a fixed step)
         self._webhook_to = to                # None → read live settings (which member the event wakes)
+        self._sweep = sweep or _default_orphan_sweep  # called (symbol, asof_ms) on a vanished position
 
     def _step(self) -> float:
         if self._step_pct is not None:
@@ -103,11 +118,14 @@ class Monitor:
 
     def refresh_book(self, seed: bool = False) -> None:
         """Re-read the testnet position book. New symbols seed their bucket silently;
-        closed symbols are dropped. When not seeding, evaluate at the fresh marks so a
-        crossing is caught even with the websocket off."""
+        closed symbols are dropped — and their stranded TP/SL legs swept (BUG-02).
+        When not seeding, evaluate at the fresh marks so a crossing is caught even
+        with the websocket off."""
         from . import exchange
+        asof = exchange.server_now_ms()         # before the snapshot: legs younger than this are a reopen's
         positions = exchange.fetch_positions()  # raw positionRisk rows
         seen: set[str] = set()
+        dropped: list[str] = []
         with self._lock:
             for p in positions:
                 amt = _f(p.get("positionAmt")) or 0.0   # signed: + long, − short
@@ -134,9 +152,15 @@ class Monitor:
                 if sym not in seen:
                     self.book.pop(sym, None)
                     self.buckets.pop(sym, None)
+                    dropped.append(sym)
         if not seed:
             for sym in seen:
                 self._evaluate(sym, self.book[sym]["mark"])
+        for sym in dropped:                  # position gone → its TP/SL legs are orphans
+            try:
+                self._sweep(sym, asof)
+            except Exception as e:           # network — must never break the poll loop
+                log.warning("orphan sweep %s: %s", sym, e)
 
     def on_mark(self, symbol: str, mark: float) -> None:
         """A fresh mark tick from the websocket (symbol id, e.g. BTCUSDT)."""

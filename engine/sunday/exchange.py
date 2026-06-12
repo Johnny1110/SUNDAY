@@ -265,6 +265,14 @@ def clock_info() -> dict:
     return {"offset_ms": round(_clock["offset"]), "synced": _clock["synced"]}
 
 
+def server_now_ms() -> int:
+    """Server-aligned "now" (ms) WITHOUT forcing a clock sync — reads the offset the
+    signed calls keep warm, with the same behind-bias as ``_server_ms``. Free of
+    network I/O, so poll-loop callers can stamp comparison times at no cost; the
+    behind-bias means a stamp never post-dates work observed before it."""
+    return int(time.time() * 1000.0 + _clock["offset"]) - _TS_SAFETY_MS
+
+
 def _signed_request(path: str, params: dict | None = None):
     """One signed GET to the testnet fapi. Raises with Binance's {code,msg} on failure."""
     p = {k: v for k, v in (params or {}).items() if v is not None}
@@ -371,16 +379,35 @@ def create_order(symbol: str, type_: str, side: str, amount: float,
     return trade_ex().create_order(unify_trade(symbol), type_, side, amount, price, params or {})
 
 
+def fetch_mark_price(symbol: str) -> float | None:
+    """TESTNET mark price (premiumIndex, public) — the reference a MARK_PRICE trigger
+    leg is judged against at placement. None when unavailable: callers treat that as
+    "cannot judge" and proceed (the workingType fix below is the primary guard)."""
+    try:
+        url = f"{_TESTNET}/fapi/v1/premiumIndex?symbol={symbol.upper()}"
+        with urllib.request.urlopen(url, timeout=8, context=_SSL) as r:
+            return _f(json.loads(r.read()).get("markPrice"))
+    except Exception:
+        return None
+
+
 def place_stop(symbol: str, close_side: str, qty: float, trigger_price: float,
                take_profit: bool = False) -> dict:
     """A reduce-only trigger leg: TAKE_PROFIT_MARKET (tp) or STOP_MARKET (sl).
 
     ``close_side`` is opposite the position side. Used to attach TP/SL to an entry.
+
+    workingType=MARK_PRICE is load-bearing (BUG-01/BUG-04): the default CONTRACT_PRICE
+    judges the trigger on the TESTNET *last-traded* price, which drifts far from the
+    mainnet prices agents decide on (thin testnet books) — a stop placed safely below
+    the real mark could already sit in its fire zone on testnet last and execute the
+    moment it lands as a reduce-only market close. The testnet MARK price is
+    index-derived and tracks the real market, so triggers fire where agents expect.
     """
     order_type = "TAKE_PROFIT_MARKET" if take_profit else "STOP_MARKET"
     return trade_ex().create_order(
         unify_trade(symbol), order_type, close_side, qty,
-        params={"stopPrice": trigger_price, "reduceOnly": True},
+        params={"stopPrice": trigger_price, "reduceOnly": True, "workingType": "MARK_PRICE"},
     )
 
 
@@ -398,6 +425,34 @@ def cancel_order(order_id: str, symbol: str, algo: bool = False) -> dict:
         if not algoorders.is_unknown_order(str(e)):
             raise
         return trade_ex().cancel_order(order_id, sym, params={"trigger": True})
+
+
+def sweep_orphan_legs(symbol: str, before_ms: int | None = None) -> tuple[list[str], list[str]]:
+    """Cancel a symbol's resting TP/SL trigger legs across both books — the cleanup a
+    flattened position needs (BUG-02: Binance strands them inconsistently). With
+    ``before_ms``, only legs created before that server time are touched, so a
+    poll-cadence sweep can never race a just-reopened position's fresh legs.
+
+    Returns ``(cancelled_ids, failed_ids)``; a leg already gone counts as cancelled
+    (the goal — nothing resting — is met). Raises only if the legs can't be listed."""
+    from .protection import classify_leg
+    cancelled: list[str] = []
+    failed: list[str] = []
+    for o in fetch_open_orders(symbol):
+        if not classify_leg(o.get("type")):
+            continue
+        if before_ms is not None and (o.get("time") or 0) >= before_ms:
+            continue
+        oid = str(o.get("orderId"))
+        try:
+            cancel_order(oid, symbol, algo=bool(o.get("algo")))
+            cancelled.append(oid)
+        except Exception as e:
+            if isinstance(e, ccxt.OrderNotFound) or algoorders.is_unknown_order(str(e)):
+                cancelled.append(oid)
+            else:
+                failed.append(oid)
+    return cancelled, failed
 
 
 def cancel_all_orders(symbol: str) -> None:

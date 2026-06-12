@@ -41,7 +41,10 @@ curl -s "http://127.0.0.1:7777/api/funding/history?symbol=BTCUSDT&page=1"
 ```bash
 # 市價買進 / 開多，用 USD 名目金額、5× 槓桿、逐倉，附止盈止損（reduce-only trigger legs）
 # memo = 你下這一單的理由（≤300 字），會記入帳本並在 /api/account/positions 回顯給 User。
-curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application/json' -d '{
+# X-Agent = 你的名字（稽核帳本）：所有 /api/perp 寫入端點都請帶上——訂單/成交查詢會回 agent
+# 欄位，沒帶的單顯示 null（= 無法歸責，異常事件查不到你頭上也記不到你功勞）。
+curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application/json' \
+  -H 'X-Agent: trader' -d '{
   "symbol":"BTCUSDT","side":"buy","type":"market","notional_usd":200,
   "leverage":5,"margin_mode":"isolated","take_profit":75000,"stop_loss":60000,
   "memo":"4h 突破壓力 + 資金費轉負，順勢做多" }'
@@ -51,6 +54,8 @@ curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application
 curl -sX POST http://127.0.0.1:7777/api/perp/leverage     -d '{"symbol":"BTCUSDT","leverage":10}'
 curl -sX POST http://127.0.0.1:7777/api/perp/margin-mode  -d '{"symbol":"BTCUSDT","mode":"cross"}'
 curl -sX POST http://127.0.0.1:7777/api/perp/close         -d '{"symbol":"BTCUSDT"}'   # reduce-only 平倉
+#   平倉會自動撤掉該標殘留的 TP/SL 腿（回 cancelled_protection）。倉位以其他方式歸零（TP 觸發、
+#   外部平倉）時，引擎下一輪輪詢偵測到也會自動清掃孤兒腿。
 curl -sX DELETE "http://127.0.0.1:7777/api/perp/order/<id>?symbol=BTCUSDT"
 curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"                  # 撤該標所有掛單（含 TP/SL 腿）
 ```
@@ -62,6 +67,11 @@ curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"          
 TP/SL 觸發腿是幣安的**條件單（algo）**，與一般掛單分屬兩本訂單簿：回應與訂單列表會帶 `algo: true`
 （其 id 為 algoId）。你不用管哪本——`orders/open` 兩本合併回傳，`DELETE /api/perp/order/<id>` 兩種 id
 都能撤。
+
+觸發判定用**測試網 mark price**（`workingType=MARK_PRICE`，指數推導、貼近你在行情端點看到的真實
+價格）。若觸發價已在觸發區（如多單 stop_loss ≥ 現價），下單回 400 並說明方向，**整單不會送出**——
+幣安 Algo Service 對已在觸發區的腿不會拒單而是直接成交（等於瞬間市價平倉），Sunday 擋在前面。
+限價單未成交前別帶已在觸發區的 TP/SL；成交後再用 `/api/perp/protection` 補掛。
 
 ### 1a · 既有倉位的 TP/SL 管理 `/api/perp/protection`
 
@@ -93,6 +103,7 @@ curl -s http://127.0.0.1:7777/api/account/drawdown         # 權益 vs 高水位
 curl -s "http://127.0.0.1:7777/api/account/orders/open?page=1"          # 掛單（可加 &symbol=；含未觸發 TP/SL 腿）
 curl -s "http://127.0.0.1:7777/api/account/orders?symbol=BTCUSDT"       # 歷史訂單（需 symbol，分頁；含條件單歷史）
 curl -s "http://127.0.0.1:7777/api/account/trades?symbol=BTCUSDT"       # 成交（含 realized PnL，分頁）
+# 三者每列都帶 agent（下單時的 X-Agent；null = 未署名或審計上線前的舊單），可加 &agent= 過濾。
 ```
 
 風控視角欄位（給巡檢用，引擎算好、不用自己 join / 心算）：

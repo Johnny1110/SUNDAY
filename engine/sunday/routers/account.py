@@ -47,6 +47,15 @@ def _safe_leverage() -> dict:
         return {}
 
 
+def _safe_agents(symbol: str | None) -> dict:
+    """order_id → agent from the audit log (BUG-03). Store trouble degrades to
+    'attribution unknown' — never blocks the listing itself."""
+    try:
+        return store.agents_by_order_id(symbol.upper() if symbol else None)
+    except Exception:
+        return {}
+
+
 def _position_row(p: dict, journal: dict | None = None,
                   legs: dict[str, list[dict]] | None = None) -> dict:
     amt = to_float(p.get("positionAmt")) or 0.0
@@ -81,7 +90,7 @@ def _position_row(p: dict, journal: dict | None = None,
     }
 
 
-def _order_row(o: dict, lev_by_symbol: dict | None = None) -> dict:
+def _order_row(o: dict, lev_by_symbol: dict | None = None, agents: dict | None = None) -> dict:
     typ = (o.get("type") or "").upper()
     trig = to_float(o.get("stopPrice"))
     amount = to_float(o.get("origQty")) or 0.0
@@ -106,16 +115,20 @@ def _order_row(o: dict, lev_by_symbol: dict | None = None) -> dict:
         "leverage": (lev_by_symbol or {}).get(o.get("symbol")),
         "ts": o.get("time"),
         "client_order_id": o.get("clientOrderId"),
+        # who placed it, from the audit log (BUG-03); null = placed outside Sunday's
+        # write endpoints or before the audit log existed.
+        "agent": (agents or {}).get(str(o.get("orderId"))),
     }
 
 
-def _trade_row(t: dict) -> dict:
+def _trade_row(t: dict, agents: dict | None = None) -> dict:
     return {
         "id": str(t.get("id")), "order": str(t.get("orderId")), "symbol": t.get("symbol"),
         "side": (t.get("side") or "").lower(), "price": to_float(t.get("price")),
         "amount": to_float(t.get("qty")), "cost": to_float(t.get("quoteQty")),
         "fee": to_float(t.get("commission")), "fee_currency": t.get("commissionAsset"),
         "realized_pnl": to_float(t.get("realizedPnl")), "ts": t.get("time"),
+        "agent": (agents or {}).get(str(t.get("orderId"))),  # via the placing order (BUG-03)
     }
 
 
@@ -182,31 +195,48 @@ def drawdown() -> dict:
 
 
 @router.get("/orders/open")
-def open_orders(symbol: str | None = None, page: int = 1, page_size: int = 50) -> dict:
-    """Open (resting) orders, newest first — each annotated with its symbol's leverage
-    and a tp_sl classification (take_profit / stop_loss / null)."""
+def open_orders(symbol: str | None = None, page: int = 1, page_size: int = 50,
+                agent: str | None = None) -> dict:
+    """Open (resting) orders, newest first — each annotated with its symbol's leverage,
+    a tp_sl classification (take_profit / stop_loss / null) and the placing agent
+    (audit log; ``agent=`` filters to one operator)."""
     require_trade_key()
     rows = ex_call(lambda: exchange.fetch_open_orders(symbol))
     lev = _safe_leverage()
+    agents = _safe_agents(symbol)
     rows = sorted(rows, key=lambda o: o.get("time") or 0, reverse=True)
-    return paginate([_order_row(o, lev) for o in rows], page, page_size)
+    out = [_order_row(o, lev, agents) for o in rows]
+    if agent:
+        out = [r for r in out if r["agent"] == agent]
+    return paginate(out, page, page_size)
 
 
 @router.get("/orders")
 def order_history(symbol: str, start: int | None = None, limit: int = 100,
-                  page: int = 1, page_size: int = 50) -> dict:
-    """Order history for `symbol` (required by Binance fapi), newest first, paginated."""
+                  page: int = 1, page_size: int = 50, agent: str | None = None) -> dict:
+    """Order history for `symbol` (required by Binance fapi), newest first, paginated.
+    Rows carry the placing agent from the audit log (``agent=`` filters; null = placed
+    before the audit log existed or outside Sunday)."""
     require_trade_key()
     rows = ex_call(lambda: exchange.fetch_orders(symbol, since=start, limit=min(limit, 1000)))
     lev = _safe_leverage()
-    return paginate([_order_row(o, lev) for o in reversed(rows)], page, page_size)
+    agents = _safe_agents(symbol)
+    out = [_order_row(o, lev, agents) for o in reversed(rows)]
+    if agent:
+        out = [r for r in out if r["agent"] == agent]
+    return paginate(out, page, page_size)
 
 
 @router.get("/trades")
 def trade_history(symbol: str, start: int | None = None, limit: int = 100,
-                  page: int = 1, page_size: int = 50) -> dict:
+                  page: int = 1, page_size: int = 50, agent: str | None = None) -> dict:
     """Fill history for `symbol` (required by Binance fapi), newest first, paginated.
-    Each fill carries realized PnL where the exchange reports it."""
+    Each fill carries realized PnL where the exchange reports it, plus the agent that
+    placed the originating order (``agent=`` filters)."""
     require_trade_key()
     rows = ex_call(lambda: exchange.fetch_my_trades(symbol, since=start, limit=min(limit, 1000)))
-    return paginate([_trade_row(t) for t in reversed(rows)], page, page_size)
+    agents = _safe_agents(symbol)
+    out = [_trade_row(t, agents) for t in reversed(rows)]
+    if agent:
+        out = [r for r in out if r["agent"] == agent]
+    return paginate(out, page, page_size)

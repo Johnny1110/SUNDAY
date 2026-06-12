@@ -21,6 +21,21 @@ def classify_leg(order_type: str | None) -> str | None:
     return None
 
 
+def immediate_trigger(close_side: str | None, take_profit: bool,
+                      trigger: float | None, mark: float | None) -> bool | None:
+    """Would a reduce-only trigger leg fire the instant it lands? None = cannot judge.
+
+    Binance's Algo Service ACCEPTS a conditional leg whose condition is already true
+    and executes it immediately — unlike the legacy book's -2021 rejection — so a
+    mispriced trigger silently market-closes the position (BUG-01/BUG-04). Fire
+    conditions (inclusive both ways): STOP sell / TAKE_PROFIT buy fire when
+    price ≤ trigger; STOP buy / TAKE_PROFIT sell fire when price ≥ trigger."""
+    if not trigger or not mark or close_side not in ("buy", "sell"):
+        return None
+    fires_down = (close_side == "sell") != take_profit
+    return mark <= trigger if fires_down else mark >= trigger
+
+
 def protection(qty: float | None, legs: list[dict]) -> dict:
     """Whether a position's TP/SL trigger legs exist and the SL actually covers it.
 

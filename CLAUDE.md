@@ -85,8 +85,15 @@ engine/sunday/
   (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +
   自癒重試；ccxt `trade_ex` 開 `adjustForTimeDifference`）；(2) 前端改黑金配色、全面 responsive
   不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
-- **153 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
+- **187 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
   protection 風控數學與 equity 快照測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
+- **BUG-01～04 已修復（2026-06-12，見 docs/prd/bug-report/）**：(1) TP/SL 腿改
+  `workingType=MARK_PRICE` + 下單/protection 前置觸發區驗證——根因是預設 CONTRACT_PRICE 用
+  **測試網成交價**判定觸發（與 agent 決策依據的主網價脫鉤），且 Algo Service 對已在觸發區的腿
+  不回 -2021 而是直接成交 = 一掛即市價平倉（BUG-01/04）；(2) 倉位歸零自動撤孤兒 TP/SL 腿：
+  `/api/perp/close` 平倉即清 + monitor 輪詢偵測倉位消失時清（帶 server-clock 戳記，不誤殺同窗
+  重開倉的新腿）（BUG-02）；(3) 稽核帳本：`/api/perp` 寫入帶 `X-Agent` 記入 order_log
+  agent/action 欄，account 訂單/成交查詢回 `agent` 並可 `?agent=` 過濾（BUG-03）。
 - **PRD-005 已修復（2026-06-11）**：indicators 路徑套上 `ttlcache.StaleCache`（TTL 隨 interval
   比例、上游故障供應 last-good + `stale: true`）——調查證實程式無 1h 特定路徑，缺陷是上游
   卡頓無退化策略；新 cache 模組可給其他唯讀路徑重用（markets router 是同語義的前例）。

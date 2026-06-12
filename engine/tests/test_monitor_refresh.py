@@ -19,6 +19,62 @@ def _pos(entry="62843.0", amt="-0.064", mark="62843.0", lev="1"):
             "markPrice": mark, "leverage": lev}
 
 
+class TestOrphanSweepOnDrop(unittest.TestCase):
+    """BUG-02: a position that vanishes between polls leaves its TP/SL legs armed —
+    refresh_book must hand the symbol to the sweep (which cancels legs older than
+    the drop observation, so a close+reopen inside one window keeps its fresh legs)."""
+
+    def _mon(self, swept):
+        return M.Monitor(notify=lambda ev: None, step_pct=5.0, to="leader",
+                         sweep=lambda sym, asof: swept.append((sym, asof)))
+
+    def test_vanished_position_triggers_the_sweep(self):
+        swept = []
+        mon = self._mon(swept)
+        with mock.patch.object(exchange, "server_now_ms", return_value=1234), \
+             mock.patch.object(exchange, "fetch_positions", return_value=[_pos()]):
+            mon.refresh_book(seed=True)
+        with mock.patch.object(exchange, "server_now_ms", return_value=5678), \
+             mock.patch.object(exchange, "fetch_positions", return_value=[]):
+            mon.refresh_book()
+        self.assertEqual(swept, [("BTCUSDT", 5678)])  # stamped when the drop was observed
+        self.assertNotIn("BTCUSDT", mon.book)
+
+    def test_live_position_is_never_swept(self):
+        swept = []
+        mon = self._mon(swept)
+        with mock.patch.object(exchange, "server_now_ms", return_value=1234), \
+             mock.patch.object(exchange, "fetch_positions", return_value=[_pos()]):
+            mon.refresh_book(seed=True)
+            mon.refresh_book()
+        self.assertEqual(swept, [])
+
+    def test_reopened_symbol_is_not_a_drop(self):
+        # Same symbol, new identity (closed+reopened inside one poll window): the
+        # symbol never left the book, so nothing is swept — the new legs stay.
+        swept = []
+        mon = self._mon(swept)
+        with mock.patch.object(exchange, "server_now_ms", return_value=1234):
+            with mock.patch.object(exchange, "fetch_positions", return_value=[_pos()]):
+                mon.refresh_book(seed=True)
+            with mock.patch.object(exchange, "fetch_positions",
+                                   return_value=[_pos(entry="61000.0", amt="-0.2")]):
+                mon.refresh_book()
+        self.assertEqual(swept, [])
+
+    def test_sweep_errors_never_break_the_poll(self):
+        def boom(sym, asof):
+            raise RuntimeError("exchange down")
+        mon = M.Monitor(notify=lambda ev: None, step_pct=5.0, to="leader", sweep=boom)
+        with mock.patch.object(exchange, "server_now_ms", return_value=1234), \
+             mock.patch.object(exchange, "fetch_positions", return_value=[_pos()]):
+            mon.refresh_book(seed=True)
+        with mock.patch.object(exchange, "server_now_ms", return_value=5678), \
+             mock.patch.object(exchange, "fetch_positions", return_value=[]):
+            mon.refresh_book()                        # must not raise
+        self.assertEqual(mon.book, {})
+
+
 class TestRefreshBookBaselines(unittest.TestCase):
     def test_reopened_position_reseeds_silently(self):
         seen = []

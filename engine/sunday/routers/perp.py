@@ -11,13 +11,33 @@ for an existing position without re-opening it (PRD-003).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import logging
+
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import exchange, protection as riskmath, store
-from ..apiutil import ex_call, require_trade_key, to_float
+from ..apiutil import agent_of, ex_call, require_trade_key, to_float
 
 router = APIRouter(prefix="/api/perp", tags=["perp"])
+log = logging.getLogger("sunday.perp")
+
+# Every order-book write takes the caller's self-reported identity from this header
+# and records it in the audit log (BUG-03) — anonymous writes still work but show
+# agent: null in the account listings, i.e. unattributable on purpose.
+_X_AGENT = Header(default=None, alias="X-Agent",
+                  description="caller's agent id, recorded in the audit log")
+
+
+def _audit(symbol: str, order_id, agent: str | None, action: str,
+           memo: str | None = None, order: dict | None = None) -> None:
+    """Best-effort audit write (BUG-03): the exchange side effect already happened, so
+    a storage hiccup must surface in logs — never as a 5xx that makes the agent retry
+    an order that actually filled."""
+    try:
+        store.record_order(symbol.upper(), order_id, memo, order or {}, agent=agent, action=action)
+    except Exception as e:
+        log.warning("audit log write failed (%s %s): %s", action, symbol, e)
 
 
 class OrderReq(BaseModel):
@@ -87,6 +107,31 @@ def _set_margin_mode_safe(symbol: str, mode: str) -> str:
         raise HTTPException(502, f"set_margin_mode failed: {type(e).__name__}: {str(e)[:200]}")
 
 
+def _reject_immediate(kind: str, trigger: float, mark: float, close_side: str) -> None:
+    """400 for a trigger already inside its fire zone. Binance's Algo Service does NOT
+    reject such a leg (-2021 was the legacy book) — it executes it immediately as a
+    reduce-only market close (BUG-01/BUG-04), so Sunday must refuse it up front."""
+    pos_side = "long" if close_side == "sell" else "short"
+    want = {("stop_loss", "long"): "BELOW", ("take_profit", "long"): "ABOVE",
+            ("stop_loss", "short"): "ABOVE", ("take_profit", "short"): "BELOW"}[(kind, pos_side)]
+    raise HTTPException(400,
+        f"{kind} {trigger} would trigger immediately and market-close the position the "
+        f"moment it lands: trigger legs are judged against the TESTNET mark price "
+        f"(currently {mark}) and this price is already in the fire zone. For a {pos_side}, "
+        f"{kind} must sit {want} the current testnet mark. Adjust the trigger and re-place; "
+        f"for an unfilled limit entry, attach TP/SL after the fill via POST /api/perp/protection.")
+
+
+def _validate_triggers(close_side: str, mark: float | None,
+                       take_profit: float | None, stop_loss: float | None) -> None:
+    """Refuse trigger prices that would fire instantly vs the testnet mark — checked
+    BEFORE any exchange write so a bad request has zero side effects. mark None
+    (testnet feed hiccup) degrades to no check: workingType=MARK_PRICE still applies."""
+    for kind, trig in (("take_profit", take_profit), ("stop_loss", stop_loss)):
+        if trig and riskmath.immediate_trigger(close_side, kind == "take_profit", trig, mark):
+            _reject_immediate(kind, trig, mark, close_side)
+
+
 def _resolve_qty(req: OrderReq) -> float:
     if req.qty and req.qty > 0:
         return ex_call(lambda: exchange.amount_to_precision(req.symbol, req.qty))
@@ -117,16 +162,21 @@ def _place_entry(req: "OrderReq", qty: float, params: dict) -> dict:
 
 
 @router.post("/order")
-def place_order(req: OrderReq) -> dict:
+def place_order(req: OrderReq, x_agent: str | None = _X_AGENT) -> dict:
     """Place a perp order. side=buy|sell, type=market|limit; size by qty or notional_usd;
     optional leverage / margin_mode / take_profit / stop_loss."""
     require_trade_key()
+    agent = agent_of(x_agent)
     if req.side not in ("buy", "sell"):
         raise HTTPException(400, "side must be 'buy' or 'sell'")
     if req.type not in ("market", "limit"):
         raise HTTPException(400, "type must be 'market' or 'limit'")
     if req.type == "limit" and not req.price:
         raise HTTPException(400, "limit orders require a price")
+    if req.take_profit or req.stop_loss:
+        close_side = "sell" if req.side == "buy" else "buy"
+        _validate_triggers(close_side, exchange.fetch_mark_price(req.symbol),
+                           req.take_profit, req.stop_loss)
 
     applied: dict = {}
     if req.margin_mode:
@@ -148,16 +198,19 @@ def place_order(req: OrderReq) -> dict:
     legs: dict = {}
     if not req.reduce_only and (req.take_profit or req.stop_loss):
         close_side = "sell" if req.side == "buy" else "buy"
-        if req.take_profit:
-            legs["take_profit"] = _norm_order(ex_call(lambda: exchange.place_stop(
-                req.symbol, close_side, qty, req.take_profit, take_profit=True)))
-        if req.stop_loss:
-            legs["stop_loss"] = _norm_order(ex_call(lambda: exchange.place_stop(
-                req.symbol, close_side, qty, req.stop_loss, take_profit=False)))
+        for kind, trig, is_tp in (("take_profit", req.take_profit, True),
+                                  ("stop_loss", req.stop_loss, False)):
+            if not trig:
+                continue
+            legs[kind] = _norm_order(ex_call(lambda: exchange.place_stop(
+                req.symbol, close_side, qty, trig, take_profit=is_tp)))
+            _audit(req.symbol, legs[kind]["id"], agent, "protection", order={
+                "side": close_side, "type": legs[kind]["type"], "qty": qty,
+                "reduce_only": True, kind: trig})
 
     # Journal the decision: params (one column each) + the agent's memo. Joined into
     # /api/account/positions so the User sees WHY this position was opened.
-    store.record_order(req.symbol.upper(), entry.get("id"), req.memo, {
+    _audit(req.symbol, entry.get("id"), agent, "order", req.memo, {
         "side": req.side, "type": req.type, "qty": qty,
         "notional_usd": req.notional_usd, "price": req.price,
         "leverage": req.leverage, "margin_mode": req.margin_mode, "reduce_only": req.reduce_only,
@@ -188,28 +241,44 @@ def set_margin_mode(req: MarginModeReq) -> dict:
 
 
 @router.post("/close")
-def close(req: CloseReq) -> dict:
-    """Flatten an open position with a reduce-only market order."""
+def close(req: CloseReq, x_agent: str | None = _X_AGENT) -> dict:
+    """Flatten an open position with a reduce-only market order, then cancel the
+    symbol's now-orphaned TP/SL trigger legs (BUG-02 — Binance strands them
+    inconsistently). ``cancelled_protection`` lists the swept leg ids."""
     require_trade_key()
     result = ex_call(lambda: exchange.close_position(req.symbol))
     if result is None:
         raise HTTPException(404, f"no open position for {req.symbol.upper()}")
-    return {"ok": True, "closed": _norm_order(result)}
+    closed = _norm_order(result)
+    _audit(req.symbol, closed.get("id"), agent_of(x_agent), "close", order={
+        "side": closed.get("side"), "type": closed.get("type"),
+        "qty": closed.get("amount"), "reduce_only": True})
+    out = {"ok": True, "closed": closed}
+    try:
+        cancelled, failed = exchange.sweep_orphan_legs(req.symbol)
+        out["cancelled_protection"] = cancelled
+        if failed:
+            out["cancel_failed"] = failed
+    except Exception as e:  # the flatten DID happen — report the sweep miss, don't 5xx
+        out["protection_sweep_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+    return out
 
 
 @router.delete("/order/{order_id}")
-def cancel_order(order_id: str, symbol: str) -> dict:
+def cancel_order(order_id: str, symbol: str, x_agent: str | None = _X_AGENT) -> dict:
     """Cancel one resting order (symbol required by Binance fapi)."""
     require_trade_key()
     ex_call(lambda: exchange.cancel_order(order_id, symbol))
+    _audit(symbol, order_id, agent_of(x_agent), "cancel")
     return {"ok": True, "cancelled": order_id}
 
 
 @router.delete("/orders")
-def cancel_all(symbol: str) -> dict:
+def cancel_all(symbol: str, x_agent: str | None = _X_AGENT) -> dict:
     """Cancel all resting orders for a symbol."""
     require_trade_key()
     ex_call(lambda: exchange.cancel_all_orders(symbol))
+    _audit(symbol, None, agent_of(x_agent), "cancel")
     return {"ok": True, "symbol": symbol.upper()}
 
 
@@ -282,12 +351,13 @@ def get_protection(symbol: str) -> dict:
 
 
 @router.post("/protection")
-def set_protection(req: ProtectionReq) -> dict:
+def set_protection(req: ProtectionReq, x_agent: str | None = _X_AGENT) -> dict:
     """Attach or replace the TP/SL legs of an EXISTING position without re-opening it
     (after a partial close, a dropped leg, or to move a stop). For each price given, a
     new full-size reduce-only leg is placed FIRST and the old legs of that kind are
     cancelled after — the position is never left naked mid-swap. Null leaves a kind as-is."""
     require_trade_key()
+    agent = agent_of(x_agent)
     if req.take_profit is None and req.stop_loss is None:
         raise HTTPException(400, "provide take_profit and/or stop_loss (trigger price)")
     if (req.take_profit is not None and req.take_profit <= 0) or \
@@ -302,6 +372,9 @@ def set_protection(req: ProtectionReq) -> dict:
     amt = to_float(p.get("positionAmt")) or 0.0
     qty = abs(amt)
     close_side = "sell" if amt > 0 else "buy"
+    # Both triggers vetted against the position's (testnet) mark BEFORE any leg is
+    # placed — a bad stop_loss must not leave a fresh take_profit half-applied.
+    _validate_triggers(close_side, to_float(p.get("markPrice")), req.take_profit, req.stop_loss)
     old = ex_call(lambda: _trigger_legs(req.symbol))
 
     out: dict = {"ok": True, "symbol": req.symbol.upper()}
@@ -312,12 +385,16 @@ def set_protection(req: ProtectionReq) -> dict:
             continue
         leg = _place_protection_leg(req.symbol, close_side, qty, price, kind == "take_profit")
         out[kind] = _norm_order(leg)
+        _audit(req.symbol, out[kind]["id"], agent, "protection", order={
+            "side": close_side, "type": out[kind]["type"], "qty": qty,
+            "reduce_only": True, kind: price})
         for o in old:
             if o["tp_sl"] != kind:
                 continue
             try:
                 exchange.cancel_order(o["id"], req.symbol, algo=o["algo"])
                 replaced.append(o["id"])
+                _audit(req.symbol, o["id"], agent, "cancel")
             except Exception:
                 cancel_failed.append(o["id"])  # old leg still resting; reduce-only legs can't over-close
     out["replaced"] = replaced
