@@ -371,16 +371,35 @@ def create_order(symbol: str, type_: str, side: str, amount: float,
     return trade_ex().create_order(unify_trade(symbol), type_, side, amount, price, params or {})
 
 
+def fetch_mark_price(symbol: str) -> float | None:
+    """TESTNET mark price (premiumIndex, public) — the reference a MARK_PRICE trigger
+    leg is judged against at placement. None when unavailable: callers treat that as
+    "cannot judge" and proceed (the workingType fix below is the primary guard)."""
+    try:
+        url = f"{_TESTNET}/fapi/v1/premiumIndex?symbol={symbol.upper()}"
+        with urllib.request.urlopen(url, timeout=8, context=_SSL) as r:
+            return _f(json.loads(r.read()).get("markPrice"))
+    except Exception:
+        return None
+
+
 def place_stop(symbol: str, close_side: str, qty: float, trigger_price: float,
                take_profit: bool = False) -> dict:
     """A reduce-only trigger leg: TAKE_PROFIT_MARKET (tp) or STOP_MARKET (sl).
 
     ``close_side`` is opposite the position side. Used to attach TP/SL to an entry.
+
+    workingType=MARK_PRICE is load-bearing (BUG-01/BUG-04): the default CONTRACT_PRICE
+    judges the trigger on the TESTNET *last-traded* price, which drifts far from the
+    mainnet prices agents decide on (thin testnet books) — a stop placed safely below
+    the real mark could already sit in its fire zone on testnet last and execute the
+    moment it lands as a reduce-only market close. The testnet MARK price is
+    index-derived and tracks the real market, so triggers fire where agents expect.
     """
     order_type = "TAKE_PROFIT_MARKET" if take_profit else "STOP_MARKET"
     return trade_ex().create_order(
         unify_trade(symbol), order_type, close_side, qty,
-        params={"stopPrice": trigger_price, "reduceOnly": True},
+        params={"stopPrice": trigger_price, "reduceOnly": True, "workingType": "MARK_PRICE"},
     )
 
 

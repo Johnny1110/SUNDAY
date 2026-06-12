@@ -87,6 +87,31 @@ def _set_margin_mode_safe(symbol: str, mode: str) -> str:
         raise HTTPException(502, f"set_margin_mode failed: {type(e).__name__}: {str(e)[:200]}")
 
 
+def _reject_immediate(kind: str, trigger: float, mark: float, close_side: str) -> None:
+    """400 for a trigger already inside its fire zone. Binance's Algo Service does NOT
+    reject such a leg (-2021 was the legacy book) — it executes it immediately as a
+    reduce-only market close (BUG-01/BUG-04), so Sunday must refuse it up front."""
+    pos_side = "long" if close_side == "sell" else "short"
+    want = {("stop_loss", "long"): "BELOW", ("take_profit", "long"): "ABOVE",
+            ("stop_loss", "short"): "ABOVE", ("take_profit", "short"): "BELOW"}[(kind, pos_side)]
+    raise HTTPException(400,
+        f"{kind} {trigger} would trigger immediately and market-close the position the "
+        f"moment it lands: trigger legs are judged against the TESTNET mark price "
+        f"(currently {mark}) and this price is already in the fire zone. For a {pos_side}, "
+        f"{kind} must sit {want} the current testnet mark. Adjust the trigger and re-place; "
+        f"for an unfilled limit entry, attach TP/SL after the fill via POST /api/perp/protection.")
+
+
+def _validate_triggers(close_side: str, mark: float | None,
+                       take_profit: float | None, stop_loss: float | None) -> None:
+    """Refuse trigger prices that would fire instantly vs the testnet mark — checked
+    BEFORE any exchange write so a bad request has zero side effects. mark None
+    (testnet feed hiccup) degrades to no check: workingType=MARK_PRICE still applies."""
+    for kind, trig in (("take_profit", take_profit), ("stop_loss", stop_loss)):
+        if trig and riskmath.immediate_trigger(close_side, kind == "take_profit", trig, mark):
+            _reject_immediate(kind, trig, mark, close_side)
+
+
 def _resolve_qty(req: OrderReq) -> float:
     if req.qty and req.qty > 0:
         return ex_call(lambda: exchange.amount_to_precision(req.symbol, req.qty))
@@ -127,6 +152,10 @@ def place_order(req: OrderReq) -> dict:
         raise HTTPException(400, "type must be 'market' or 'limit'")
     if req.type == "limit" and not req.price:
         raise HTTPException(400, "limit orders require a price")
+    if req.take_profit or req.stop_loss:
+        close_side = "sell" if req.side == "buy" else "buy"
+        _validate_triggers(close_side, exchange.fetch_mark_price(req.symbol),
+                           req.take_profit, req.stop_loss)
 
     applied: dict = {}
     if req.margin_mode:
@@ -302,6 +331,9 @@ def set_protection(req: ProtectionReq) -> dict:
     amt = to_float(p.get("positionAmt")) or 0.0
     qty = abs(amt)
     close_side = "sell" if amt > 0 else "buy"
+    # Both triggers vetted against the position's (testnet) mark BEFORE any leg is
+    # placed — a bad stop_loss must not leave a fresh take_profit half-applied.
+    _validate_triggers(close_side, to_float(p.get("markPrice")), req.take_profit, req.stop_loss)
     old = ex_call(lambda: _trigger_legs(req.symbol))
 
     out: dict = {"ok": True, "symbol": req.symbol.upper()}

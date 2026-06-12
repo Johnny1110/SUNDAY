@@ -63,6 +63,11 @@ TP/SL 觸發腿是幣安的**條件單（algo）**，與一般掛單分屬兩本
 （其 id 為 algoId）。你不用管哪本——`orders/open` 兩本合併回傳，`DELETE /api/perp/order/<id>` 兩種 id
 都能撤。
 
+觸發判定用**測試網 mark price**（`workingType=MARK_PRICE`，指數推導、貼近你在行情端點看到的真實
+價格）。若觸發價已在觸發區（如多單 stop_loss ≥ 現價），下單回 400 並說明方向，**整單不會送出**——
+幣安 Algo Service 對已在觸發區的腿不會拒單而是直接成交（等於瞬間市價平倉），Sunday 擋在前面。
+限價單未成交前別帶已在觸發區的 TP/SL；成交後再用 `/api/perp/protection` 補掛。
+
 ### 1a · 既有倉位的 TP/SL 管理 `/api/perp/protection`
 
 保護腿脫落（部分平倉、調倉、誤刪）時**補掛/改掛，不必重開倉**；也用來巡檢單一標的保護狀態：

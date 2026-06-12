@@ -21,6 +21,37 @@ class TestClassifyLeg(unittest.TestCase):
         self.assertIsNone(P.classify_leg(None))
 
 
+class TestImmediateTrigger(unittest.TestCase):
+    """BUG-01/BUG-04 guard: a trigger already in its fire zone executes instantly
+    (the Algo Service accepts it instead of rejecting -2021)."""
+
+    def test_long_stop_loss(self):
+        self.assertFalse(P.immediate_trigger("sell", False, 62500.0, 63150.0))  # below mark: safe
+        self.assertTrue(P.immediate_trigger("sell", False, 63500.0, 63150.0))   # above mark: fires
+
+    def test_long_take_profit(self):
+        self.assertFalse(P.immediate_trigger("sell", True, 64000.0, 63150.0))
+        self.assertTrue(P.immediate_trigger("sell", True, 63000.0, 63150.0))
+
+    def test_short_stop_loss(self):
+        self.assertFalse(P.immediate_trigger("buy", False, 64000.0, 63150.0))
+        self.assertTrue(P.immediate_trigger("buy", False, 62000.0, 63150.0))
+
+    def test_short_take_profit(self):
+        self.assertFalse(P.immediate_trigger("buy", True, 62000.0, 63150.0))
+        self.assertTrue(P.immediate_trigger("buy", True, 64000.0, 63150.0))
+
+    def test_trigger_at_mark_is_in_the_fire_zone(self):
+        # Binance trigger conditions are inclusive (≤ / ≥) — equality fires.
+        self.assertTrue(P.immediate_trigger("sell", False, 63150.0, 63150.0))
+        self.assertTrue(P.immediate_trigger("sell", True, 63150.0, 63150.0))
+
+    def test_unjudgeable_inputs_return_none(self):
+        self.assertIsNone(P.immediate_trigger("sell", False, None, 100.0))
+        self.assertIsNone(P.immediate_trigger("sell", False, 90.0, None))
+        self.assertIsNone(P.immediate_trigger(None, False, 90.0, 100.0))
+
+
 class TestProtection(unittest.TestCase):
     def test_fully_protected(self):
         legs = [{"tp_sl": "take_profit", "amount": 1.0, "close_position": False},
