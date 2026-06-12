@@ -41,7 +41,10 @@ curl -s "http://127.0.0.1:7777/api/funding/history?symbol=BTCUSDT&page=1"
 ```bash
 # 市價買進 / 開多，用 USD 名目金額、5× 槓桿、逐倉，附止盈止損（reduce-only trigger legs）
 # memo = 你下這一單的理由（≤300 字），會記入帳本並在 /api/account/positions 回顯給 User。
-curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application/json' -d '{
+# X-Agent = 你的名字（稽核帳本）：所有 /api/perp 寫入端點都請帶上——訂單/成交查詢會回 agent
+# 欄位，沒帶的單顯示 null（= 無法歸責，異常事件查不到你頭上也記不到你功勞）。
+curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application/json' \
+  -H 'X-Agent: trader' -d '{
   "symbol":"BTCUSDT","side":"buy","type":"market","notional_usd":200,
   "leverage":5,"margin_mode":"isolated","take_profit":75000,"stop_loss":60000,
   "memo":"4h 突破壓力 + 資金費轉負，順勢做多" }'
@@ -100,6 +103,7 @@ curl -s http://127.0.0.1:7777/api/account/drawdown         # 權益 vs 高水位
 curl -s "http://127.0.0.1:7777/api/account/orders/open?page=1"          # 掛單（可加 &symbol=；含未觸發 TP/SL 腿）
 curl -s "http://127.0.0.1:7777/api/account/orders?symbol=BTCUSDT"       # 歷史訂單（需 symbol，分頁；含條件單歷史）
 curl -s "http://127.0.0.1:7777/api/account/trades?symbol=BTCUSDT"       # 成交（含 realized PnL，分頁）
+# 三者每列都帶 agent（下單時的 X-Agent；null = 未署名或審計上線前的舊單），可加 &agent= 過濾。
 ```
 
 風控視角欄位（給巡檢用，引擎算好、不用自己 join / 心算）：
