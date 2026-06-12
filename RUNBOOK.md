@@ -145,3 +145,53 @@ milestone-6 is the pivot from the old supervised-trading engine to an **agent-na
 proxy** (markets / klines+indicators / funding / perp orders / account / indices / alerts /
 monitor). The previous strategy/thesis/desk/ablation API was removed. Follow-up (not part of this
 build): refresh `evva-swarm.yml` + `agents/` so the swarm *consumer* uses the new `/api/*` surface.
+
+## 10. sunday-mcp sidecar (milestone-9 — typed MCP tools for the swarm)
+
+A stateless, keyless sidecar that serves the hot-path API as typed MCP tools
+(`mcp__sunday__*`, 22 of them) on `http://127.0.0.1:7780/mcp`. It only talks to the local
+engine on `:7777`; the engine itself is untouched. Background: `docs/prd/milestone-9/`.
+
+### Run / stop
+
+```bash
+cd engine && . .venv/bin/activate
+pip install -e '.[mcp]'               # once — the mcp SDK is an optional extra
+python -m sunday_mcp                  # serves :7780/mcp (env: SUNDAY_MCP_PORT / SUNDAY_BASE_URL)
+```
+
+Run it wherever the engine runs (same autostart mechanism). Stopping = kill the process — it
+holds no state. macOS gotcha: `pkill -f "python -m sunday_mcp"` misses the venv process
+(ps resolves it to capital-P `Python …`); use `pkill -fi`.
+
+### Health & regression
+
+```bash
+curl -s :7780/healthz        # {"ok":true,…,"engine":{"reachable":true,"status":200}}
+./scripts/smoke-mcp.sh       # full regression — NOTE: the trade-chain part places and
+                             # closes a real TESTNET order on SMOKE_SYMBOL (default BTCUSDT)
+```
+
+Two health layers: `ok` = sidecar up; `engine.reachable` = the engine behind it.
+
+### Failure handling
+
+| Symptom | Meaning | Action |
+| --- | --- | --- |
+| sidecar down / `mcp__sunday__*` tool errors | agents auto-degrade to `http_request` + `GET /manual` (invariant S6) and note the degraded channel in their reports | not urgent — restart `python -m sunday_mcp` when convenient |
+| `healthz` `ok` but `engine.reachable: false` | the engine is the sick part | fix the engine first (§7); the sidecar needs no touch |
+| a write tool answered “placed-or-not UNKNOWN” | the connection died mid-write; the order MAY have landed | reconcile via `open_orders` / `positions` BEFORE any retry — never blind-resend a write |
+
+### Kill-switch (back to milestone-6 behaviour)
+
+`.evva/settings.json` → add `"disabled": true` inside the `sunday` server entry (or delete the
+file) → restart the swarm. Members lose the `mcp__sunday__*` catalog and operate on
+`http_request` alone (S6). Re-enable: revert the edit, restart the swarm again.
+
+### Sidecar restart vs swarm (self-heal)
+
+Designed behaviour: while the sidecar is down a member's `mcp__sunday__*` call fails as a tool
+error (they degrade per the one-line rule); after `python -m sunday_mcp` comes back the next
+call succeeds — no swarm restart needed. **Verify this once during rollout step 2** (kill the
+sidecar, watch one member degrade, restart it, watch the next call succeed) and record the
+result here.

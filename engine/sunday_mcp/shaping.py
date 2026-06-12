@@ -377,3 +377,137 @@ def shape_protection_status(payload: dict) -> str:
         sl_text += f" · covers qty: {str(payload['sl_qty_covers']).lower()}"
     lines.append(sl_text)
     return "\n".join(lines)
+
+
+# ── write results (POST /api/perp/* · /api/alerts, PRD-9.3) ──────────────────
+#
+# Every write shaper ends with a one-line `next:` reminder — the SOP's
+# "placing is not done" rule built into the tool feedback itself.
+
+def _placed_bits(o: dict) -> str:
+    """One placed order/leg from the engine's _norm_order shape:
+    #id type @price|trig qty status [filled] [· algo]."""
+    if o.get("price"):
+        px = f"@{fmt_price(o['price'])}"
+    elif o.get("trigger_price"):
+        px = f"trig {fmt_price(o['trigger_price'])}"
+    else:
+        px = "@market"
+    bits = (f"#{o.get('id', '?')} {o.get('type', '?')} {px}"
+            f" qty {fmt_price(o.get('amount'))} {o.get('status', '?')}")
+    filled = o.get("filled") or 0
+    if filled and (o.get("status") or "").lower() != "filled":
+        bits += f" filled {fmt_price(filled)}"  # partial fill on a resting order
+    if o.get("algo"):
+        bits += " · algo"
+    return bits
+
+
+def shape_order_result(p: dict) -> str:
+    o = p.get("order") or {}
+    lines = [f"placed: {o.get('symbol', '?')} {o.get('side', '?')} {_placed_bits(o)}"]
+    applied = p.get("applied") or {}
+    if applied:
+        bits = []
+        if applied.get("leverage"):
+            bits.append(f"leverage {applied['leverage']}x")
+        if applied.get("margin_mode"):
+            bits.append(f"margin_mode {applied['margin_mode']}")
+        if applied.get("margin_mode_note"):
+            bits.append(f"⚠ {applied['margin_mode_note']}")
+        lines.append("applied: " + " · ".join(bits))
+    for kind, tag in (("take_profit", "TP"), ("stop_loss", "SL")):
+        if p.get(kind):
+            lines.append(f"{tag} leg {_placed_bits(p[kind])}")
+    lines.append("next: verify with protection_status, then positions")
+    return "\n".join(lines)
+
+
+def shape_close_result(p: dict) -> str:
+    c = p.get("closed") or {}
+    lines = [f"closed: {c.get('symbol', '?')} {c.get('side', '?')} {_placed_bits(c)}"]
+    if p.get("protection_sweep_error"):
+        lines.append(f"⚠ protection sweep failed: {p['protection_sweep_error']}"
+                     " — check protection_status for orphan legs")
+    else:
+        swept = p.get("cancelled_protection") or []
+        lines.append("cancelled protection legs: "
+                     + (", ".join(f"#{i}" for i in swept) if swept else "none"))
+    if p.get("cancel_failed"):
+        lines.append("⚠ cancel failed: " + ", ".join(f"#{i}" for i in p["cancel_failed"])
+                     + " — cancel manually via cancel_order")
+    lines.append("next: confirm flat via positions / protection_status")
+    return "\n".join(lines)
+
+
+def shape_protection_result(p: dict) -> str:
+    lines = [f"{p.get('symbol', '?')} protection updated"]
+    for kind, tag in (("take_profit", "TP"), ("stop_loss", "SL")):
+        if p.get(kind):
+            lines.append(f"{tag} leg {_placed_bits(p[kind])}")
+    rep = p.get("replaced") or []
+    lines.append("replaced old legs: "
+                 + (", ".join(f"#{i}" for i in rep) if rep else "none"))
+    if p.get("cancel_failed"):
+        lines.append("⚠ old legs still resting: "
+                     + ", ".join(f"#{i}" for i in p["cancel_failed"])
+                     + " — reduce-only legs can't over-close; cancel via cancel_order")
+    lines.append("next: verify with protection_status")
+    return "\n".join(lines)
+
+
+def shape_cancel_result(p: dict) -> str:
+    return (f"cancelled #{p.get('cancelled', '?')}\n"
+            "next: re-check open_orders (and protection_status if it was a TP/SL leg)")
+
+
+def shape_cancel_all_result(p: dict) -> str:
+    return (f"{p.get('symbol', '?')}: all resting orders cancelled\n"
+            "next: open_orders should be empty — if a position remains it is now"
+            " NAKED (TP/SL legs were resting orders too); re-attach via set_protection")
+
+
+def shape_leverage_margin(margin: dict | None, leverage: dict | None,
+                          margin_error: str | None = None,
+                          leverage_error: str | None = None) -> str:
+    """Two-segment result (margin-mode first, then leverage). Either segment can
+    fail on its own — both outcomes always render, never hiding a half-success."""
+    lines = []
+    if margin is not None:
+        lines.append(f"margin_mode: {margin.get('margin_mode', '?')}"
+                     f" ({margin.get('result', 'set')})")
+    elif margin_error:
+        lines.append(f"margin_mode: {margin_error}")
+    if leverage is not None:
+        lines.append(f"leverage: {leverage.get('leverage', '?')}x set")
+    elif leverage_error:
+        lines.append(f"leverage: {leverage_error}")
+    return "\n".join(lines)
+
+
+# ── /api/alerts ───────────────────────────────────────────────────────────────
+
+def _alert_line(a: dict) -> str:
+    base = (f"#{a.get('id', '?')} {a.get('symbol', '?')} {a.get('kind', '?')}"
+            f" {fmt_price(a.get('threshold'))} {a.get('status', '?')}")
+    if a.get("kind") == "pct_move" and a.get("ref_price") is not None:
+        base += f" (ref {fmt_price(a['ref_price'])})"
+    if a.get("triggered_price") is not None:
+        base += f" → fired @{fmt_price(a['triggered_price'])}"
+    note = clip(a.get("note"))
+    return f"{base} | {note}" if note else base
+
+
+def shape_alert_created(a: dict) -> str:
+    return _alert_line(a) + "\nfires once, then flips to status=triggered"
+
+
+def shape_alerts_list(payload: dict) -> str:
+    rows = payload.get("items") or []
+    if not rows:
+        return "no alerts\n" + page_tail(payload)
+    return "\n".join(_alert_line(a) for a in rows) + "\n" + page_tail(payload)
+
+
+def shape_alert_deleted(p: dict) -> str:
+    return f"deleted alert #{p.get('deleted', '?')}"

@@ -508,5 +508,221 @@ class FmtPhase2Test(unittest.TestCase):
                          "⚠ stale (age 7.5s)")
 
 
+# ── Phase 3 write-result shapers ──────────────────────────────────────────────
+
+def _norm(**over):
+    """The engine's _norm_order shape (perp router)."""
+    row = {"id": "123", "symbol": "BTCUSDT", "type": "market", "side": "buy",
+           "status": "filled", "price": None, "amount": 0.002, "filled": 0.002,
+           "reduce_only": False, "trigger_price": None, "ts": 1718064000000,
+           "algo": False}
+    row.update(over)
+    return row
+
+
+class OrderResultTest(unittest.TestCase):
+    def test_market_fill_with_legs(self):
+        out = shaping.shape_order_result({
+            "ok": True, "applied": {"leverage": 5, "margin_mode": "isolated"},
+            "order": _norm(), "memo": "x",
+            "take_profit": _norm(id="111", type="take_profit_market", side="sell",
+                                 status="new", trigger_price=70000.0, filled=0.0,
+                                 algo=True),
+            "stop_loss": _norm(id="222", type="stop_market", side="sell",
+                               status="new", trigger_price=60000.0, filled=0.0,
+                               algo=True),
+        })
+        self.assertIn("placed: BTCUSDT buy #123 market @market qty 0.002 filled", out)
+        self.assertNotIn("filled filled", out)  # full fill isn't repeated
+        self.assertIn("applied: leverage 5x · margin_mode isolated", out)
+        self.assertIn("TP leg #111 take_profit_market trig 70000 qty 0.002 new · algo", out)
+        self.assertIn("SL leg #222 stop_market trig 60000 qty 0.002 new · algo", out)
+        self.assertTrue(out.endswith("next: verify with protection_status, then positions"))
+
+    def test_limit_resting_partial_fill(self):
+        out = shaping.shape_order_result({
+            "ok": True, "applied": {},
+            "order": _norm(type="limit", status="new", price=62000.0, filled=0.001)})
+        self.assertIn("placed: BTCUSDT buy #123 limit @62000 qty 0.002 new filled 0.001", out)
+        self.assertNotIn("applied:", out)   # nothing applied → no line
+        self.assertNotIn("TP leg", out)
+
+    def test_margin_mode_note_warns(self):
+        out = shaping.shape_order_result({
+            "ok": True, "order": _norm(),
+            "applied": {"margin_mode": "cross",
+                        "margin_mode_note": "unchanged: a position exists (-4047)"}})
+        self.assertIn("⚠ unchanged: a position exists (-4047)", out)
+
+
+class CloseResultTest(unittest.TestCase):
+    def test_close_sweeps_legs(self):
+        out = shaping.shape_close_result({
+            "ok": True,
+            "closed": _norm(id="999", side="sell", reduce_only=True),
+            "cancelled_protection": ["111", "222"]})
+        self.assertIn("closed: BTCUSDT sell #999 market @market qty 0.002 filled", out)
+        self.assertIn("cancelled protection legs: #111, #222", out)
+        self.assertTrue(out.endswith("next: confirm flat via positions / protection_status"))
+
+    def test_no_legs_to_sweep(self):
+        out = shaping.shape_close_result({
+            "ok": True, "closed": _norm(id="999", side="sell"),
+            "cancelled_protection": []})
+        self.assertIn("cancelled protection legs: none", out)
+
+    def test_sweep_error_and_cancel_failed_warn(self):
+        out = shaping.shape_close_result({
+            "ok": True, "closed": _norm(),
+            "protection_sweep_error": "Timeout: x"})
+        self.assertIn("⚠ protection sweep failed: Timeout: x", out)
+        self.assertIn("orphan legs", out)
+        out = shaping.shape_close_result({
+            "ok": True, "closed": _norm(),
+            "cancelled_protection": ["111"], "cancel_failed": ["222"]})
+        self.assertIn("⚠ cancel failed: #222 — cancel manually via cancel_order", out)
+
+
+class ProtectionResultTest(unittest.TestCase):
+    def test_replaced_legs(self):
+        out = shaping.shape_protection_result({
+            "ok": True, "symbol": "BTCUSDT",
+            "stop_loss": _norm(id="333", type="stop_market", side="sell",
+                               status="new", trigger_price=61000.0, filled=0.0,
+                               algo=True),
+            "replaced": ["222"]})
+        self.assertIn("BTCUSDT protection updated", out)
+        self.assertIn("SL leg #333 stop_market trig 61000 qty 0.002 new · algo", out)
+        self.assertIn("replaced old legs: #222", out)
+        self.assertNotIn("TP leg", out)
+        self.assertTrue(out.endswith("next: verify with protection_status"))
+
+    def test_fresh_attach_and_cancel_failed(self):
+        out = shaping.shape_protection_result({
+            "ok": True, "symbol": "ETHUSDT",
+            "take_profit": _norm(id="444", type="take_profit_market",
+                                 trigger_price=4000.0, status="new", filled=0.0),
+            "replaced": [], "cancel_failed": ["555"]})
+        self.assertIn("replaced old legs: none", out)
+        self.assertIn("⚠ old legs still resting: #555", out)
+        self.assertIn("cancel via cancel_order", out)
+
+
+class CancelAndConfigResultTest(unittest.TestCase):
+    def test_cancel_one(self):
+        out = shaping.shape_cancel_result({"ok": True, "cancelled": "777"})
+        self.assertIn("cancelled #777", out)
+        self.assertIn("next: re-check open_orders", out)
+
+    def test_cancel_all_warns_naked(self):
+        out = shaping.shape_cancel_all_result({"ok": True, "symbol": "BTCUSDT"})
+        self.assertIn("BTCUSDT: all resting orders cancelled", out)
+        self.assertIn("NAKED", out)
+        self.assertIn("set_protection", out)
+
+    def test_leverage_margin_both_ok(self):
+        out = shaping.shape_leverage_margin(
+            {"ok": True, "symbol": "BTCUSDT", "margin_mode": "isolated", "result": "set"},
+            {"ok": True, "symbol": "BTCUSDT", "leverage": 5})
+        self.assertEqual(out, "margin_mode: isolated (set)\nleverage: 5x set")
+
+    def test_leverage_margin_half_success_visible(self):
+        out = shaping.shape_leverage_margin(
+            None, {"ok": True, "leverage": 3},
+            margin_error="[sunday 409] cannot change margin mode while a position exists")
+        self.assertIn("margin_mode: [sunday 409]", out)
+        self.assertIn("leverage: 3x set", out)
+
+    def test_leverage_margin_single_segment(self):
+        self.assertEqual(
+            shaping.shape_leverage_margin(None, {"leverage": 10}),
+            "leverage: 10x set")
+        self.assertEqual(
+            shaping.shape_leverage_margin(
+                {"margin_mode": "cross", "result": "unchanged"}, None),
+            "margin_mode: cross (unchanged)")
+
+
+class AlertShapersTest(unittest.TestCase):
+    ROW = {"id": 7, "symbol": "BTCUSDT", "kind": "price_above", "threshold": 70000.0,
+           "ref_price": None, "note": "breakout watch", "status": "active",
+           "created_at": "2026-06-12T03:00:00Z", "triggered_at": None,
+           "triggered_price": None}
+
+    def test_created(self):
+        out = shaping.shape_alert_created(self.ROW)
+        self.assertIn("#7 BTCUSDT price_above 70000 active | breakout watch", out)
+        self.assertIn("fires once", out)
+
+    def test_pct_move_shows_ref(self):
+        out = shaping.shape_alert_created(
+            {**self.ROW, "kind": "pct_move", "threshold": 5.0, "ref_price": 63666.1})
+        self.assertIn("pct_move 5 active (ref 63666.1)", out)
+
+    def test_list_with_triggered_and_tail(self):
+        fired = {**self.ROW, "id": 5, "status": "triggered", "note": None,
+                 "triggered_price": 70123.4, "triggered_at": "2026-06-12T04:00:00Z"}
+        out = shaping.shape_alerts_list(_envelope([self.ROW, fired]))
+        self.assertIn("#7 BTCUSDT price_above 70000 active", out)
+        self.assertIn("#5 BTCUSDT price_above 70000 triggered → fired @70123.4", out)
+        self.assertIn("has_more: false", out)
+
+    def test_empty_and_delete(self):
+        self.assertIn("no alerts", shaping.shape_alerts_list(_envelope([])))
+        self.assertEqual(shaping.shape_alert_deleted({"ok": True, "deleted": 5}),
+                         "deleted alert #5")
+
+
+class Phase3BudgetTest(unittest.TestCase):
+    """Worst-legal-input budget locks for the write tools (S3) — small by
+    construction, locked anyway so a future verbose rendering fails loudly."""
+
+    BUDGET = 60_000
+    W = 123456.7890123456
+    BIG_ID = "9" * 20
+
+    def _leg(self):
+        return _norm(id=self.BIG_ID, type="take_profit_market", status="new",
+                     trigger_price=self.W, amount=self.W, filled=0.0, algo=True)
+
+    def test_order_close_protection_results(self):
+        order = shaping.shape_order_result({
+            "ok": True, "order": _norm(id=self.BIG_ID, amount=self.W),
+            "applied": {"leverage": 125, "margin_mode": "isolated",
+                        "margin_mode_note": "x" * 120},
+            "take_profit": self._leg(), "stop_loss": self._leg()})
+        close = shaping.shape_close_result({
+            "ok": True, "closed": _norm(id=self.BIG_ID, amount=self.W),
+            "cancelled_protection": [self.BIG_ID] * 99,
+            "cancel_failed": [self.BIG_ID] * 99})
+        prot = shaping.shape_protection_result({
+            "ok": True, "symbol": "1000000BABYDOGEUSDT",
+            "take_profit": self._leg(), "stop_loss": self._leg(),
+            "replaced": [self.BIG_ID] * 99, "cancel_failed": [self.BIG_ID] * 99})
+        for out in (order, close, prot):
+            self.assertLess(len(out), self.BUDGET)
+
+    def test_cancel_config_alert_results(self):
+        outs = [
+            shaping.shape_cancel_result({"cancelled": self.BIG_ID}),
+            shaping.shape_cancel_all_result({"symbol": "1000000BABYDOGEUSDT"}),
+            shaping.shape_leverage_margin(None, None, "e" * 500, "e" * 500),
+            shaping.shape_alert_created({"id": 10 ** 9, "symbol": "1000000BABYDOGEUSDT",
+                                         "kind": "pct_move", "threshold": self.W,
+                                         "ref_price": self.W, "note": "n" * 120,
+                                         "status": "active"}),
+        ]
+        for out in outs:
+            self.assertLess(len(out), self.BUDGET)
+
+    def test_alerts_list_page(self):
+        row = {"id": 10 ** 9, "symbol": "1000000BABYDOGEUSDT", "kind": "pct_move",
+               "threshold": self.W, "ref_price": self.W, "note": "n" * 120,
+               "status": "triggered", "triggered_price": self.W,
+               "triggered_at": "2026-06-12T04:00:00Z"}
+        out = shaping.shape_alerts_list(_envelope([row] * 30, total=300, has_more=True))
+        self.assertLess(len(out), self.BUDGET)
+
+
 if __name__ == "__main__":
     unittest.main()

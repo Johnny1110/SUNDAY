@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "sunday": { "type": "http", "url": "http://127.0.0.1:7780/mcp", "timeout": 60 }
+  }
+}

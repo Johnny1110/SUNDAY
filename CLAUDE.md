@@ -80,6 +80,15 @@ engine/sunday/
 
 ## 現況
 
+- **milestone-9 = sunday-mcp sidecar（typed MCP 工具通道，混合制）**（見
+  [docs/prd/milestone-9/README.md](docs/prd/milestone-9/README.md)，S1–S7 新增不變量先讀）：
+  `engine/sunday_mcp/` 無狀態 sidecar（`python -m sunday_mcp`，:7780/mcp → :7777，金鑰永不進
+  sidecar），22 個工具 = 13 唯讀 + 8 寫入 + ping，外加 `sunday://manual` resource。寫入 schema
+  強制 `agent`/`take_profit`/`stop_loss`/`memo`（裸單不可表達）；`validate.py` 純函式交叉驗證；
+  寫入零自動重試、連線失敗回 placed-or-not UNKNOWN。`http_request` + `/manual` 永遠是降級通道
+  （S6）；kill-switch = `.evva/settings.json` 設 `disabled:true` 重啟 swarm。Phase 1–3 已交付
+  （單測 + testnet 全鏈路 smoke 綠）；Phase 4 上線中（settings/prompts/RUNBOOK §10/manual MCP 節
+  已 commit，兩週評估與裁決見 PRD-9.4）。
 - **milestone-6 = agent-native proxy（地基，現行）。** **milestone-8 = 韌性 / 黑金 UI / Telegram**
   （見 [docs/prd/milestone-8/README.md](docs/prd/milestone-8/README.md)）：
   (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +

@@ -18,6 +18,14 @@ from .client import Reply
 UNREACHABLE_TEXT = ("sunday engine unreachable after retry — check GET /health; "
                     "fall back to http_request if urgent (see RUNBOOK.md)")
 
+# The write-path variant (PRD-9.3 §3, the other half of S5): a connection-layer
+# failure on a write means the request MAY have landed after the timeout, so the
+# one forbidden move is a blind resend — that is how double positions happen.
+WRITE_UNREACHABLE_TEXT = (
+    "engine unreachable — placed-or-not UNKNOWN: the write may have landed after "
+    "the timeout. Reconcile with open_orders/positions before any retry; "
+    "never blind-resend a write. Engine health: GET /health (RUNBOOK.md)")
+
 # Known-code hints (PRD-9.2 §3). Matched in order against the response body;
 # first hit wins. Keep these one-liners aligned with the operate-desk skill.
 _HINTS: tuple[tuple[str, str], ...] = (

@@ -55,5 +55,15 @@ class HintTest(unittest.TestCase):
         self.assertEqual(out, "[sunday 404] not found")
 
 
+class WriteUnreachableTest(unittest.TestCase):
+    def test_unknown_reconcile_message(self):
+        # the safety phrasing IS the contract (S5): a timed-out write may have
+        # landed — the agent must reconcile, never blind-resend
+        t = errors.WRITE_UNREACHABLE_TEXT
+        self.assertIn("placed-or-not UNKNOWN", t)
+        self.assertIn("open_orders/positions", t)
+        self.assertIn("never blind-resend", t)
+
+
 if __name__ == "__main__":
     unittest.main()

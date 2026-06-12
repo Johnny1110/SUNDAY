@@ -87,6 +87,15 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(len(fake.calls), 1)
         self.assertEqual(self.naps, [])
 
+    def test_delete_never_retries(self):
+        # cancel paths (DELETE) sit under the same S5 rule as POST
+        fake = self._install(_conn_err())
+        with self.assertRaises(client.EngineUnreachable):
+            client.call("DELETE", "/api/perp/orders", query={"symbol": "X"},
+                        agent="friday")
+        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(self.naps, [])
+
     def test_get_retry_optout(self):
         # the health probe path: fast failure, no 1s gap
         fake = self._install(_conn_err())
