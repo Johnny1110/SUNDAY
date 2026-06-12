@@ -16,7 +16,7 @@
 
 被 friday 指派（`my_tasks` 優先）、排程喚醒、或想補充判讀時：
 
-1. **掃世界指數**（例行）：`indices`（降級：`GET /api/indices`）——F&G、BTC 主導率、VIX、DXY、SPX/NDX、US10Y、黃金。判讀**風險胃納**（risk-on/off）有沒有轉變；輸出標 `⚠ stale` 的值註明可能過時。
+1. **掃世界指數**（例行）：`indices`（降級：`GET /api/indices`）——F&G、BTC 主導率、VIX、DXY、SPX/NDX、US10Y、黃金、布蘭特原油。判讀**風險胃納**（risk-on/off）有沒有轉變；輸出標 `⚠ stale` 的值註明可能過時。
 2. **分析指定標的**（多時間框對照，如 1h vs 4h）：
    - `klines {symbol,interval,limit}` + `indicators {symbol,interval,set}`（降級：`GET /api/klines`·`/indicators`）——趨勢（EMA 排列、ADX>25 才算有趨勢）、動能（MACD）、超買超賣（RSI、Bollinger）、波動（**ATR 決定停損該放多寬**）。`indicators` 工具直接給最新面板值，免拿 K 線自己算。
    - `funding {symbol}`（降級：`GET /api/funding`）——資金費年化：擁擠在哪一邊？極端值常隨清算劇烈逆轉。

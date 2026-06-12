@@ -39,5 +39,26 @@ class TestParsers(unittest.TestCase):
         self.assertIsNone(X.parse_yahoo_chart({"chart": {"result": []}}))
 
 
+class TestSpecConsistency(unittest.TestCase):
+    def test_oil_registered(self):
+        """Brent crude — the international oil benchmark — is on the panel."""
+        self.assertIn("oil", X.INDEX_KEYS)
+        group, label, bucket = X._SPEC["oil"]
+        self.assertEqual(group, "energy")
+        self.assertIn("Brent", label)
+        self.assertEqual(bucket, "macro")
+        self.assertEqual(X._STOOQ["oil"], "cb.f")
+        self.assertEqual(X._YAHOO["oil"], "BZ=F")
+
+    def test_every_traditional_key_has_both_feeds(self):
+        """Every non-crypto index must map on BOTH feeds — Stooq is primary,
+        Yahoo is the fallback get_index relies on when Stooq is down."""
+        for key, (group, _, _) in X._SPEC.items():
+            if group == "crypto":
+                continue
+            self.assertIn(key, X._STOOQ, f"{key} missing a Stooq symbol")
+            self.assertIn(key, X._YAHOO, f"{key} missing a Yahoo symbol")
+
+
 if __name__ == "__main__":
     unittest.main()

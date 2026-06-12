@@ -15,13 +15,13 @@ router = APIRouter(prefix="/api/indices", tags=["indices"])
 
 @router.get("")
 def all_indices() -> dict:
-    """Snapshot of every index (crypto F&G/dominance + VIX/DXY/SPX/NDX/US10Y/Gold)."""
+    """Snapshot of every index (crypto F&G/dominance + VIX/DXY/SPX/NDX/US10Y/Gold/Brent oil)."""
     return {"items": indices.get_all()}
 
 
 @router.get("/{key}")
 def one_index(key: str) -> dict:
-    """One index by key (e.g. fear-greed, vix, dxy, spx, ndx, us10y, gold)."""
+    """One index by key (e.g. fear-greed, vix, dxy, spx, ndx, us10y, gold, oil)."""
     try:
         return indices.get_index(key)
     except KeyError:

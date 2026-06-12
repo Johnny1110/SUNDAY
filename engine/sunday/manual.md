@@ -133,11 +133,11 @@ curl -s "http://127.0.0.1:7777/api/account/trades?symbol=BTCUSDT"       # 成交
 ```bash
 curl -s http://127.0.0.1:7777/api/indices                  # 全部快照
 curl -s http://127.0.0.1:7777/api/indices/fear-greed       # 加密恐懼貪婪
-# 其他 key：btc-dominance | vix | dxy | spx | ndx | us10y | gold
+# 其他 key：btc-dominance | vix | dxy | spx | ndx | us10y | gold | oil
 ```
 
-加密情緒（Fear&Greed、BTC 主導率）+ 總經（VIX 波動率、DXY 美元、標普 / 那斯達克、美十年期殖利率、黃金）。
-皆有 TTL 快取，feed 失效時回傳最後值（`stale: true`）而非報錯。
+加密情緒（Fear&Greed、BTC 主導率）+ 總經（VIX 波動率、DXY 美元、標普 / 那斯達克、美十年期殖利率、黃金、
+布蘭特原油）。皆有 TTL 快取，feed 失效時回傳最後值（`stale: true`）而非報錯。
 
 ## 6 · 價格提醒 `/api/alerts`
 

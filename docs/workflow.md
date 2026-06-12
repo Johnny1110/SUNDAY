@@ -138,7 +138,7 @@ runtime 改任何 worker 的 cron 與指令——他的方向盤；動之前先 
 | 行情 | `GET /api/markets`·`/{symbol}` · `/api/klines`·`/indicators` · `/api/funding`·`/history` | 可下單市場（量/漲跌排序）/ K 線 + RSI/MACD/ADX… / 資金費（mainnet 真實價格） |
 | 交易 | `POST /api/perp/order`·`/close`·`/leverage`·`/margin-mode` · `DELETE /api/perp/order/{id}`·`/orders` | 永續下單（TP/SL/memo）/ 平倉 / 撤單（testnet） |
 | 帳戶 | `GET /api/account/positions`·`/balance`·`/pnl`·`/drawdown`·`/orders/open`·`/orders`·`/trades` | 倉位（含 TP/SL protection 旗標、清算距離）/ 權益 / 損益與曝險聚合 / 回撤 vs 高水位 / 訂單與成交史 |
-| 外部指數 | `GET /api/indices`·`/{key}` | 恐懼貪婪、BTC dominance、VIX、DXY、美股、美債、黃金（TTL 快取） |
+| 外部指數 | `GET /api/indices`·`/{key}` | 恐懼貪婪、BTC dominance、VIX、DXY、美股、美債、黃金、布蘭特原油（TTL 快取） |
 | 提醒/監控 | `POST·GET·DELETE /api/alerts` · `GET /api/monitor`·`POST /config` | 價格提醒（觸發一次）/ 倉位 ROI 監控開關與步長 |
 | 協作狀態 | `GET·PUT /api/memory/{friday,researcher}` · `POST·GET /api/journal` · `POST·GET /api/reports` | 公告板：friday 憲法 + researcher 研究日誌（agent 私人工作記憶已原生化進 evva）/ reviewer 日誌 / friday→User 快訊 |
 | 系統 | `GET /health` · `GET /api/system/time` · `GET /manual` · `/dashboard` | 活性 / 時間時區錨點 / agent 手冊 / User 介面 |

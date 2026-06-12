@@ -7,11 +7,11 @@
 MCP：`indices {}`（全部）或 `indices {key:"fear-greed"}`。降級：
 
 ```jsonc
-{ "method":"GET", "url":"http://127.0.0.1:7777/api/indices" }                 // 全部：F&G / 主導率 / VIX / DXY / SPX / NDX / US10Y / Gold
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/indices" }                 // 全部：F&G / 主導率 / VIX / DXY / SPX / NDX / US10Y / Gold / Brent Oil
 { "method":"GET", "url":"http://127.0.0.1:7777/api/indices/fear-greed" }
 ```
 
-- risk-on / risk-off 轉變？VIX 飆、DXY 強、美股弱 → 加密通常承壓；F&G 極端貪婪 → 過熱、極端恐懼 → 可能超賣。
+- risk-on / risk-off 轉變？VIX 飆、DXY 強、美股弱 → 加密通常承壓；F&G 極端貪婪 → 過熱、極端恐懼 → 可能超賣；布蘭特油價急漲 → 通膨與地緣風險升溫，偏 risk-off。
 
 ## 標的技術面（friday 指定）
 

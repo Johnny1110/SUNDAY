@@ -2,7 +2,7 @@
 
 The "risk weather" an agent reads alongside the order book: crypto Fear & Greed +
 BTC dominance (crypto-native sentiment), and VIX / DXY / S&P500 / Nasdaq / US10Y /
-Gold (the macro backdrop crypto tracks). All free, no key.
+Gold / Brent crude (the macro backdrop crypto tracks). All free, no key.
 
   * crypto sentiment — alternative.me (F&G), CoinGecko /global (dominance/mcap)
   * macro/equities   — Stooq CSV, with a Yahoo Finance chart fallback per symbol
@@ -32,13 +32,16 @@ _SPEC: dict[str, tuple[str, str, str]] = {
     "ndx":           ("equities", "Nasdaq 100",          "macro"),
     "us10y":         ("rates",    "US 10Y Yield",        "macro"),
     "gold":          ("metals",   "Gold (XAU/USD)",      "macro"),
+    "oil":           ("energy",   "Brent Crude Oil",     "macro"),
 }
 INDEX_KEYS = list(_SPEC.keys())
 
 _TTL_ATTR = {"feargreed": "indices_ttl_feargreed", "fast": "indices_ttl_fast", "macro": "indices_ttl_macro"}
 
-_STOOQ = {"vix": "^vix", "dxy": "^dxy", "spx": "^spx", "ndx": "^ndx", "us10y": "10us.b", "gold": "xauusd"}
-_YAHOO = {"vix": "^VIX", "dxy": "DX-Y.NYB", "spx": "^GSPC", "ndx": "^NDX", "us10y": "^TNX", "gold": "GC=F"}
+_STOOQ = {"vix": "^vix", "dxy": "^dxy", "spx": "^spx", "ndx": "^ndx", "us10y": "10us.b", "gold": "xauusd",
+          "oil": "cb.f"}   # Brent crude futures — the international oil benchmark (WTI would be cl.f)
+_YAHOO = {"vix": "^VIX", "dxy": "DX-Y.NYB", "spx": "^GSPC", "ndx": "^NDX", "us10y": "^TNX", "gold": "GC=F",
+          "oil": "BZ=F"}
 
 _cache: dict[str, tuple[float, dict]] = {}
 

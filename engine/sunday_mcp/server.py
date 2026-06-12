@@ -42,7 +42,7 @@ AgentParam = Annotated[str, Field(min_length=1, max_length=32,
 Interval = Literal["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h",
                    "12h", "1d", "3d", "1w", "1M"]
 IndexKey = Literal["fear-greed", "btc-dominance", "vix", "dxy", "spx", "ndx",
-                   "us10y", "gold"]
+                   "us10y", "gold", "oil"]
 
 
 def _call(method: str, path: str, **kw) -> client.Reply:
@@ -167,8 +167,8 @@ def build_server() -> FastMCP:
     @mcp.tool(annotations=_READONLY)
     def indices(key: IndexKey | None = None) -> str:
         """External risk-weather panel: crypto Fear&Greed + BTC dominance, VIX,
-        DXY, SPX, NDX, US10Y, gold. Omit `key` for the full snapshot. `⚠ stale`
-        means the feed is down and this is the last good value."""
+        DXY, SPX, NDX, US10Y, gold, Brent oil. Omit `key` for the full snapshot.
+        `⚠ stale` means the feed is down and this is the last good value."""
         if key:
             return _shaped(_call("GET", f"/api/indices/{key}"), shaping.shape_index)
         return _shaped(_call("GET", "/api/indices"), shaping.shape_indices)
