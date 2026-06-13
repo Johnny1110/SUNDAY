@@ -424,4 +424,17 @@ def build_server() -> FastMCP:
 
 
 def main() -> None:
-    build_server().run(transport="streamable-http")
+    import anyio
+    import uvicorn
+
+    mcp = build_server()
+    starlette_app = mcp.streamable_http_app()
+    config = uvicorn.Config(
+        starlette_app,
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+        loop="asyncio",  # uvloop 0.22.1 may segfault on Python 3.13; pin to asyncio
+    )
+    server = uvicorn.Server(config)
+    anyio.run(server.serve)

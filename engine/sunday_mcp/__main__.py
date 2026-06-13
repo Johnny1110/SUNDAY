@@ -8,6 +8,8 @@ missing install fails with one actionable line instead of a traceback.
 from __future__ import annotations
 
 import sys
+import time
+import traceback
 
 
 def main() -> int:
@@ -19,8 +21,19 @@ def main() -> int:
                   " pip install -e 'engine[mcp]'", file=sys.stderr)
             return 1
         raise
-    run()
-    return 0
+
+    delay = 3
+    while True:
+        try:
+            run()
+        except Exception:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"{ts} sunday-mcp crashed:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+        # run() only returns on shutdown or crash; restart after a brief pause
+        print(f"sunday-mcp: restarting in {delay}s...", file=sys.stderr)
+        time.sleep(delay)
+        delay = min(delay * 2, 60)
 
 
 if __name__ == "__main__":
