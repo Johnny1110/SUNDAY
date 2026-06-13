@@ -51,7 +51,7 @@ workers:
     # 不設 schedule：純 ticket/訊息驅動（task_assign 即喚醒）；工程量低頻，cron 只會空燒 token
   - agent: analyst-flow
     schedule:
-      cron: "*/10 * * * *" # every 10 mins
+      cron: "*/20 * * * *" # every 20 mins — safety-net cadence (was */10), NOT market polling: friday wakes on webhooks + can task analyst-flow on demand (immediate), and tightens this via schedule_set in hot markets
       prompt: "例行技術面巡檢：先看 my_tasks 有無 friday 指派的標的；掃世界指數看風險胃納（MCP indices，降級 GET /api/indices），對 friday 關注 / 持有的標的（GET /api/memory/friday 的 watchlist）查指標與資金費（MCP indicators·funding，降級 /api/klines/indicators·/api/funding）判讀方向與關鍵價位，send_message friday（方向 + 強度 + 支撐/壓力/建議停損 + 理由）。沒事就一句 stand down。"
   - agent: analyst-news
     schedule:
@@ -73,7 +73,7 @@ workers:
   - agent: watchdog          # cheap DeepSeek-flash watchdog — every 5 min, read-only health + Top10 volatility
     schedule:
       cron: "*/5 * * * *" # 5 mins — keep in sync with the "every 5 min" wording in profile.yml / system_prompt.md / friday's roster
-      prompt: "例行看門狗巡檢（全程 http_request 直驗源頭）：1. GET :7777/health 確認 Sunday 活著（掛了=🚨緊急，立報 friday）；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌；3. GET :7780/healthz 看 sunday-mcp sidecar——只在狀態翻轉時通報（掛了=ℹ️非緊急：隊友會自動降級 http_request，擇機重啟即可）；4. 快照（含 mcp_ok）寫回 .watchdog-markets.json。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
+      prompt: "例行看門狗巡檢（全程 http_request 直驗源頭；三個 GET + 讀上次快照同一回合平行發、一次拿齊再判讀）：1. GET :7777/health 確認 Sunday 活著（掛了=🚨緊急，立報 friday）；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌；3. GET :7780/healthz 看 sunday-mcp sidecar——只在狀態翻轉時通報（掛了=ℹ️非緊急：隊友會自動降級 http_request，擇機重啟即可）；4. 快照（含 mcp_ok）寫回 .watchdog-markets.json。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
 
 settings:
   # bypass = fully autonomous (operator-confirmed): GET reads and POST trades both run
